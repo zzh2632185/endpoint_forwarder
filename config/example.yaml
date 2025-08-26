@@ -41,6 +41,11 @@ streaming:
 # 全局超时配置
 global_timeout: "300s"       # 非流式请求的全局默认超时时间，默认: 300s (5分钟)
 
+# 鉴权配置 (可选)
+auth:
+  enabled: false             # 是否启用鉴权，默认: false (不鉴权)
+  # token: "your-bearer-token"  # Bearer Token，启用鉴权时必须设置
+
 # 代理配置 (可选)
 proxy:
   enabled: false              # 是否启用代理

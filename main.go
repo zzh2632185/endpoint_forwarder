@@ -58,6 +58,17 @@ func main() {
 		"endpoints_count", len(cfg.Endpoints),
 		"strategy", cfg.Strategy.Type)
 
+	// Display security information during startup
+	if cfg.Auth.Enabled {
+		logger.Info("🔐 鉴权已启用，访问需要Bearer Token验证")
+	} else {
+		logger.Info("🔓 鉴权已禁用，所有请求将直接转发")
+		// Pre-warn about non-localhost binding without auth
+		if cfg.Server.Host != "127.0.0.1" && cfg.Server.Host != "localhost" && cfg.Server.Host != "::1" {
+			logger.Warn("⚠️  注意：将在非本地地址启动但未启用鉴权，请确保网络环境安全")
+		}
+	}
+
 	// Create endpoint manager
 	endpointManager := endpoint.NewManager(cfg)
 	endpointManager.Start()
@@ -69,6 +80,7 @@ func main() {
 	// Create middleware
 	loggingMiddleware := middleware.NewLoggingMiddleware(logger)
 	monitoringMiddleware := middleware.NewMonitoringMiddleware(endpointManager)
+	authMiddleware := middleware.NewAuthMiddleware(cfg.Auth)
 
 	// Setup HTTP server
 	mux := http.NewServeMux()
@@ -76,8 +88,8 @@ func main() {
 	// Register monitoring endpoints
 	monitoringMiddleware.RegisterHealthEndpoint(mux)
 
-	// Register proxy handler for all other requests
-	mux.Handle("/", loggingMiddleware.Wrap(proxyHandler))
+	// Register proxy handler for all other requests with middleware chain
+	mux.Handle("/", loggingMiddleware.Wrap(authMiddleware.Wrap(proxyHandler)))
 
 	server := &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", cfg.Server.Host, cfg.Server.Port),
@@ -114,6 +126,17 @@ func main() {
 		logger.Info("📋 配置说明：请在 Claude Code 的 settings.json 中设置")
 		logger.Info("🔧 ANTHROPIC_BASE_URL: " + baseURL)
 		logger.Info("📡 服务器地址: " + baseURL)
+		
+		// Security warning for non-localhost addresses
+		if cfg.Server.Host != "127.0.0.1" && cfg.Server.Host != "localhost" && cfg.Server.Host != "::1" {
+			if !cfg.Auth.Enabled {
+				logger.Warn("⚠️  安全警告：服务器绑定到非本地地址但未启用鉴权！")
+				logger.Warn("🔒 强烈建议启用鉴权以保护您的端点访问")
+				logger.Warn("📝 在配置文件中设置 auth.enabled: true 和 auth.token 来启用鉴权")
+			} else {
+				logger.Info("🔒 已启用鉴权保护，服务器可安全对外开放")
+			}
+		}
 	}
 
 	// Wait for interrupt signal

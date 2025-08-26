@@ -16,6 +16,7 @@ type Config struct {
 	Logging      LoggingConfig    `yaml:"logging"`
 	Streaming    StreamingConfig  `yaml:"streaming"`
 	Proxy        ProxyConfig      `yaml:"proxy"`
+	Auth         AuthConfig       `yaml:"auth"`
 	GlobalTimeout time.Duration   `yaml:"global_timeout"` // Global timeout for non-streaming requests
 	Endpoints    []EndpointConfig `yaml:"endpoints"`
 }
@@ -65,6 +66,11 @@ type ProxyConfig struct {
 	Port     int    `yaml:"port"`     // Proxy port
 	Username string `yaml:"username"` // Optional auth username
 	Password string `yaml:"password"` // Optional auth password
+}
+
+type AuthConfig struct {
+	Enabled bool   `yaml:"enabled"`                   // Enable authentication, default: false
+	Token   string `yaml:"token,omitempty"`           // Bearer token for authentication
 }
 
 type EndpointConfig struct {

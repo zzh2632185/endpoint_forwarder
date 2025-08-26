@@ -84,6 +84,20 @@ global_timeout: "300s"      # Default timeout for all non-streaming requests (5 
 - Only applies to non-streaming requests
 - Can be overridden by individual endpoint `timeout` settings
 
+### Authentication Configuration
+```yaml
+auth:
+  enabled: false                    # Enable Bearer token authentication (default: false)
+  token: "your-bearer-token"        # Bearer token for authentication (required when enabled)
+```
+
+**Usage:**
+- When `enabled: false` (default): No authentication is required, requests pass through directly
+- When `enabled: true`: All requests must include `Authorization: Bearer <token>` header
+- The token in the header must exactly match the configured token
+- Returns HTTP 401 Unauthorized for missing, malformed, or invalid tokens
+- Only applies to the main proxy endpoints (health check endpoints remain open)
+
 **Health Check Behavior:**
 - **Endpoint**: Tests the `/v1/models` endpoint (suitable for Claude API)
 - **Success Criteria**: Accepts both 2xx (success) and 4xx (client error) status codes
