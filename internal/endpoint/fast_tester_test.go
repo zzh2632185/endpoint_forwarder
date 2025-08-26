@@ -49,16 +49,20 @@ func TestFastTester(t *testing.T) {
 
 	// Test parallel testing
 	ctx := context.Background()
-	results := tester.TestEndpointsParallel(ctx, endpoints)
+	results, _ := tester.TestEndpointsParallel(ctx, endpoints)
 
 	if len(results) != len(endpoints) {
 		t.Errorf("Expected %d results, got %d", len(endpoints), len(results))
 	}
 
 	// Test caching
-	results2 := tester.TestEndpointsParallel(ctx, endpoints)
+	results2, usedCache := tester.TestEndpointsParallel(ctx, endpoints)
 	if len(results2) != len(endpoints) {
 		t.Errorf("Expected %d cached results, got %d", len(endpoints), len(results2))
+	}
+
+	if !usedCache {
+		t.Error("Expected cache to be used on second call")
 	}
 }
 
@@ -90,7 +94,7 @@ func TestFastTesterDisabled(t *testing.T) {
 
 	// Test with disabled fast testing
 	ctx := context.Background()
-	results := tester.TestEndpointsParallel(ctx, endpoints)
+	results, usedCache := tester.TestEndpointsParallel(ctx, endpoints)
 
 	if len(results) != 1 {
 		t.Errorf("Expected 1 result, got %d", len(results))
@@ -98,5 +102,9 @@ func TestFastTesterDisabled(t *testing.T) {
 
 	if !results[0].Success {
 		t.Error("Expected artificial success result when fast testing is disabled")
+	}
+
+	if usedCache {
+		t.Error("Expected cache not to be used when fast testing is disabled")
 	}
 }

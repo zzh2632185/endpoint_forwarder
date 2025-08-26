@@ -131,8 +131,13 @@ func (h *Handler) handleRegularRequest(ctx context.Context, w http.ResponseWrite
 	}
 	
 	if lastErr != nil {
-		// If all retries failed, return error
-		http.Error(w, "All endpoints failed: "+lastErr.Error(), http.StatusBadGateway)
+		// Check if the error is due to no healthy endpoints
+		if strings.Contains(lastErr.Error(), "no healthy endpoints") {
+			http.Error(w, "Service Unavailable: No healthy endpoints available", http.StatusServiceUnavailable)
+		} else {
+			// If all retries failed, return error
+			http.Error(w, "All endpoints failed: "+lastErr.Error(), http.StatusBadGateway)
+		}
 	}
 }
 

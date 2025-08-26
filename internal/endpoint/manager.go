@@ -136,10 +136,10 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 	}
 
 	// Perform parallel fast testing
-	testResults := m.fastTester.TestEndpointsParallel(ctx, healthy)
+	testResults, usedCache := m.fastTester.TestEndpointsParallel(ctx, healthy)
 	
-	// Log ALL test results first (including failures)
-	if len(testResults) > 0 {
+	// Log ALL test results first (including failures) - but only if cache wasn't used
+	if len(testResults) > 0 && !usedCache {
 		slog.InfoContext(ctx, "🔍 [Fastest Response Mode] 端点性能测试结果:")
 		successCount := 0
 		for _, result := range testResults {
@@ -190,8 +190,13 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 			}
 		}
 		
-		slog.InfoContext(ctx, fmt.Sprintf("🚀 [Fastest Response Mode] 选择最快端点: %s (%dms)", 
-			fastestEndpoint.Config.Name, fastestTime))
+		cacheIndicator := ""
+		if usedCache {
+			cacheIndicator = " (缓存)"
+		}
+		
+		slog.InfoContext(ctx, fmt.Sprintf("🚀 [Fastest Response Mode] 选择最快端点: %s (%dms)%s", 
+			fastestEndpoint.Config.Name, fastestTime, cacheIndicator))
 		
 		// Show other available endpoints if there are more than one
 		if len(endpoints) > 1 {

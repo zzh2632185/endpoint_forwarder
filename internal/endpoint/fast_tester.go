@@ -39,7 +39,8 @@ func NewFastTester(cfg *config.Config) *FastTester {
 }
 
 // TestEndpointsParallel performs parallel testing on all healthy endpoints
-func (ft *FastTester) TestEndpointsParallel(ctx context.Context, endpoints []*Endpoint) []*FastTestResult {
+// Returns (results, usedCache) where usedCache indicates if cached results were used
+func (ft *FastTester) TestEndpointsParallel(ctx context.Context, endpoints []*Endpoint) ([]*FastTestResult, bool) {
 	if !ft.config.Strategy.FastTestEnabled {
 		// Fast testing disabled, return endpoints with artificial results based on current status
 		results := make([]*FastTestResult, 0, len(endpoints))
@@ -54,7 +55,7 @@ func (ft *FastTester) TestEndpointsParallel(ctx context.Context, endpoints []*En
 			ep.mutex.RUnlock()
 			results = append(results, result)
 		}
-		return results
+		return results, false
 	}
 
 	// Check cache first
@@ -63,7 +64,7 @@ func (ft *FastTester) TestEndpointsParallel(ctx context.Context, endpoints []*En
 		slog.Info("📋 Using cached fast test results",
 			"cached_endpoints", len(cachedResults),
 			"cache_ttl", ft.config.Strategy.FastTestCacheTTL)
-		return cachedResults
+		return cachedResults, true
 	}
 
 	slog.Debug("🚀 Starting parallel fast test",
@@ -93,7 +94,7 @@ func (ft *FastTester) TestEndpointsParallel(ctx context.Context, endpoints []*En
 		"total_endpoints", len(results),
 		"successful", ft.countSuccessful(results))
 
-	return results
+	return results, false
 }
 
 // testSingleEndpoint tests a single endpoint

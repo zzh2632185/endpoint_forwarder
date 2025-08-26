@@ -39,6 +39,7 @@ func (h *Handler) handleSSERequest(w http.ResponseWriter, r *http.Request, bodyB
 	}
 	
 	if len(endpoints) == 0 {
+		w.WriteHeader(http.StatusServiceUnavailable)
 		h.writeSSEError(w, "No healthy endpoints available", flusher)
 		return
 	}
