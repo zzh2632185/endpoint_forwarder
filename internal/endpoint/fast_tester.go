@@ -1,0 +1,245 @@
+package endpoint
+
+import (
+	"context"
+	"log/slog"
+	"net/http"
+	"sync"
+	"time"
+
+	"endpoint_forwarder/config"
+)
+
+// FastTestResult represents the result of a fast endpoint test
+type FastTestResult struct {
+	Endpoint     *Endpoint
+	ResponseTime time.Duration
+	Success      bool
+	Error        error
+	TestTime     time.Time
+}
+
+// FastTester performs quick parallel tests on endpoints
+type FastTester struct {
+	config     *config.Config
+	client     *http.Client
+	resultCache map[string]*FastTestResult
+	cacheMutex  sync.RWMutex
+}
+
+// NewFastTester creates a new fast tester
+func NewFastTester(cfg *config.Config) *FastTester {
+	return &FastTester{
+		config: cfg,
+		client: &http.Client{
+			Timeout: cfg.Strategy.FastTestTimeout,
+		},
+		resultCache: make(map[string]*FastTestResult),
+	}
+}
+
+// TestEndpointsParallel performs parallel testing on all healthy endpoints
+func (ft *FastTester) TestEndpointsParallel(ctx context.Context, endpoints []*Endpoint) []*FastTestResult {
+	if !ft.config.Strategy.FastTestEnabled {
+		// Fast testing disabled, return endpoints with artificial results based on current status
+		results := make([]*FastTestResult, 0, len(endpoints))
+		for _, ep := range endpoints {
+			ep.mutex.RLock()
+			result := &FastTestResult{
+				Endpoint:     ep,
+				ResponseTime: ep.Status.ResponseTime,
+				Success:      ep.Status.Healthy,
+				TestTime:     time.Now(),
+			}
+			ep.mutex.RUnlock()
+			results = append(results, result)
+		}
+		return results
+	}
+
+	// Check cache first
+	cachedResults := ft.getCachedResults(endpoints)
+	if len(cachedResults) == len(endpoints) {
+		slog.Debug("📋 Using cached fast test results",
+			"cached_endpoints", len(cachedResults),
+			"cache_ttl", ft.config.Strategy.FastTestCacheTTL)
+		return cachedResults
+	}
+
+	slog.Debug("🚀 Starting parallel fast test",
+		"endpoints", len(endpoints),
+		"timeout", ft.config.Strategy.FastTestTimeout,
+		"test_path", ft.config.Strategy.FastTestPath)
+
+	// Perform parallel tests
+	results := make([]*FastTestResult, len(endpoints))
+	var wg sync.WaitGroup
+
+	for i, endpoint := range endpoints {
+		wg.Add(1)
+		go func(idx int, ep *Endpoint) {
+			defer wg.Done()
+			results[idx] = ft.testSingleEndpoint(ctx, ep)
+		}(i, endpoint)
+	}
+
+	// Wait for all tests to complete
+	wg.Wait()
+
+	// Update cache
+	ft.updateCache(results)
+
+	slog.Debug("✅ Parallel fast test completed",
+		"total_endpoints", len(results),
+		"successful", ft.countSuccessful(results))
+
+	return results
+}
+
+// testSingleEndpoint tests a single endpoint
+func (ft *FastTester) testSingleEndpoint(ctx context.Context, endpoint *Endpoint) *FastTestResult {
+	start := time.Now()
+
+	// Create test URL
+	testURL := endpoint.Config.URL + ft.config.Strategy.FastTestPath
+
+	req, err := http.NewRequestWithContext(ctx, "GET", testURL, nil)
+	if err != nil {
+		return &FastTestResult{
+			Endpoint:     endpoint,
+			ResponseTime: time.Since(start),
+			Success:      false,
+			Error:        err,
+			TestTime:     time.Now(),
+		}
+	}
+
+	// Add authorization if configured
+	if endpoint.Config.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+endpoint.Config.Token)
+	}
+
+	// Add custom headers
+	for key, value := range endpoint.Config.Headers {
+		req.Header.Set(key, value)
+	}
+
+	resp, err := ft.client.Do(req)
+	responseTime := time.Since(start)
+
+	if err != nil {
+		slog.Warn("❌ Fast test failed with network error",
+			"endpoint", endpoint.Config.Name,
+			"url", testURL,
+			"response_time_ms", responseTime.Milliseconds(),
+			"error", err.Error(),
+			"reason", "Network or connection error")
+
+		return &FastTestResult{
+			Endpoint:     endpoint,
+			ResponseTime: responseTime,
+			Success:      false,
+			Error:        err,
+			TestTime:     time.Now(),
+		}
+	}
+
+	resp.Body.Close()
+
+	// Consider 2xx and 40x as success (same logic as health check)
+	success := (resp.StatusCode >= 200 && resp.StatusCode < 300) ||
+		(resp.StatusCode >= 400 && resp.StatusCode < 500)
+
+	// Log detailed test results
+	if success {
+		slog.Debug("⚡ Fast test completed successfully",
+			"endpoint", endpoint.Config.Name,
+			"url", testURL,
+			"status_code", resp.StatusCode,
+			"response_time_ms", responseTime.Milliseconds(),
+			"success", success)
+	} else {
+		slog.Warn("❌ Fast test failed with bad status",
+			"endpoint", endpoint.Config.Name,
+			"url", testURL,
+			"status_code", resp.StatusCode,
+			"response_time_ms", responseTime.Milliseconds(),
+			"success", success,
+			"reason", "Invalid HTTP status code")
+	}
+
+	return &FastTestResult{
+		Endpoint:     endpoint,
+		ResponseTime: responseTime,
+		Success:      success,
+		TestTime:     time.Now(),
+	}
+}
+
+// getCachedResults returns cached results for endpoints if they're still valid
+func (ft *FastTester) getCachedResults(endpoints []*Endpoint) []*FastTestResult {
+	ft.cacheMutex.RLock()
+	defer ft.cacheMutex.RUnlock()
+
+	now := time.Now()
+	results := make([]*FastTestResult, 0, len(endpoints))
+
+	for _, ep := range endpoints {
+		if cached, exists := ft.resultCache[ep.Config.Name]; exists {
+			if now.Sub(cached.TestTime) <= ft.config.Strategy.FastTestCacheTTL {
+				results = append(results, cached)
+			} else {
+				// Cache expired for this endpoint
+				return nil
+			}
+		} else {
+			// No cache for this endpoint
+			return nil
+		}
+	}
+
+	return results
+}
+
+// updateCache updates the cache with new test results
+func (ft *FastTester) updateCache(results []*FastTestResult) {
+	ft.cacheMutex.Lock()
+	defer ft.cacheMutex.Unlock()
+
+	for _, result := range results {
+		ft.resultCache[result.Endpoint.Config.Name] = result
+	}
+}
+
+// countSuccessful counts successful test results
+func (ft *FastTester) countSuccessful(results []*FastTestResult) int {
+	count := 0
+	for _, result := range results {
+		if result.Success {
+			count++
+		}
+	}
+	return count
+}
+
+// SortByResponseTime sorts test results by response time (fastest first)
+func SortByResponseTime(results []*FastTestResult) []*FastTestResult {
+	// Filter successful results first
+	successful := make([]*FastTestResult, 0, len(results))
+	for _, result := range results {
+		if result.Success {
+			successful = append(successful, result)
+		}
+	}
+
+	// Sort successful results by response time
+	for i := 0; i < len(successful)-1; i++ {
+		for j := i + 1; j < len(successful); j++ {
+			if successful[i].ResponseTime > successful[j].ResponseTime {
+				successful[i], successful[j] = successful[j], successful[i]
+			}
+		}
+	}
+
+	return successful
+}

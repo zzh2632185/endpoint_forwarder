@@ -1,0 +1,40 @@
+# Claude Request Forwarder Configuration
+
+server:
+  host: "127.0.0.1"
+  port: 8087
+
+# Routing strategy: "priority" or "fastest"
+strategy:
+  type: "fastest"
+  fast_test_enabled: true
+  fast_test_cache_ttl: "30s"
+  fast_test_timeout: "5s"
+
+# Retry configuration
+retry:
+  max_attempts: 3
+  base_delay: "1s"
+  max_delay: "30s"
+  multiplier: 2.0
+
+# Health check configuration
+health:
+  check_interval: "30s"
+  timeout: "5s"
+  health_path: "/v1/models"
+
+# Logging configuration
+logging:
+  level: "info"
+  format: "json"
+
+# Endpoint configurations
+endpoints:
+  - name: "example"
+    url: "https://example.com"
+    priority: 1
+    timeout: "30s"
+    token: "sk-"
+
+

@@ -1,0 +1,180 @@
+package middleware
+
+import (
+	"fmt"
+	"log/slog"
+	"net/http"
+	"strings"
+	"time"
+)
+
+// LoggingMiddleware provides request/response logging
+type LoggingMiddleware struct {
+	logger *slog.Logger
+}
+
+// NewLoggingMiddleware creates a new logging middleware
+func NewLoggingMiddleware(logger *slog.Logger) *LoggingMiddleware {
+	return &LoggingMiddleware{
+		logger: logger,
+	}
+}
+
+// responseWriter wraps http.ResponseWriter to capture status code and bytes written
+type responseWriter struct {
+	http.ResponseWriter
+	statusCode int
+	bytes      int64
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	if rw.statusCode == 0 {
+		rw.statusCode = code
+	}
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	if rw.statusCode == 0 {
+		rw.statusCode = http.StatusOK
+	}
+	n, err := rw.ResponseWriter.Write(b)
+	rw.bytes += int64(n)
+	return n, err
+}
+
+// Wrap wraps an HTTP handler with logging
+func (lm *LoggingMiddleware) Wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		
+		// Wrap response writer
+		rw := &responseWriter{
+			ResponseWriter: w,
+			statusCode:     0,
+			bytes:          0,
+		}
+
+		// Log initial request (without endpoint info yet)
+		lm.logger.Info("🚀 Request started",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"client_ip", getClientIP(r),
+			"user_agent", truncateString(r.UserAgent(), 50),
+			"content_length", r.ContentLength,
+		)
+
+		// Process request
+		next.ServeHTTP(rw, r)
+
+		// Calculate duration
+		duration := time.Since(start)
+
+		// Get endpoint info from context (set by retry handler)
+		selectedEndpoint := "unknown"
+		if ep, ok := r.Context().Value("selected_endpoint").(string); ok {
+			selectedEndpoint = ep
+		}
+
+		// Log response
+		statusEmoji := getStatusEmoji(rw.statusCode)
+		lm.logger.Info(fmt.Sprintf("%s Request completed", statusEmoji),
+			"method", r.Method,
+			"path", r.URL.Path,
+			"endpoint", selectedEndpoint,
+			"status_code", rw.statusCode,
+			"bytes_written", formatBytes(rw.bytes),
+			"duration", formatDuration(duration),
+			"client_ip", getClientIP(r),
+		)
+
+		// Log slow requests as warnings
+		if duration > 10*time.Second {
+			lm.logger.Warn("🐌 Slow request detected",
+				"method", r.Method,
+				"path", r.URL.Path,
+				"endpoint", selectedEndpoint,
+				"duration", formatDuration(duration),
+				"status_code", rw.statusCode,
+			)
+		}
+
+		// Log errors
+		if rw.statusCode >= 400 {
+			level := slog.LevelWarn
+			emoji := "⚠️"
+			if rw.statusCode >= 500 {
+				level = slog.LevelError
+				emoji = "❌"
+			}
+			
+			lm.logger.Log(r.Context(), level, fmt.Sprintf("%s Request error", emoji),
+				"method", r.Method,
+				"path", r.URL.Path,
+				"endpoint", selectedEndpoint,
+				"status_code", rw.statusCode,
+				"duration", formatDuration(duration),
+			)
+		}
+	})
+}
+
+// Helper functions for better log formatting
+
+func getClientIP(r *http.Request) string {
+	// Check for X-Forwarded-For header
+	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+		return strings.Split(xff, ",")[0]
+	}
+	// Check for X-Real-IP header
+	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+		return xri
+	}
+	// Use RemoteAddr as fallback
+	if idx := strings.LastIndex(r.RemoteAddr, ":"); idx != -1 {
+		return r.RemoteAddr[:idx]
+	}
+	return r.RemoteAddr
+}
+
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
+}
+
+func getStatusEmoji(statusCode int) string {
+	switch {
+	case statusCode >= 200 && statusCode < 300:
+		return "✅"
+	case statusCode >= 300 && statusCode < 400:
+		return "🔄"
+	case statusCode >= 400 && statusCode < 500:
+		return "⚠️"
+	case statusCode >= 500:
+		return "❌"
+	default:
+		return "❓"
+	}
+}
+
+func formatBytes(bytes int64) string {
+	if bytes < 1024 {
+		return fmt.Sprintf("%dB", bytes)
+	} else if bytes < 1024*1024 {
+		return fmt.Sprintf("%.1fKB", float64(bytes)/1024)
+	} else {
+		return fmt.Sprintf("%.1fMB", float64(bytes)/(1024*1024))
+	}
+}
+
+func formatDuration(d time.Duration) string {
+	if d < time.Millisecond {
+		return fmt.Sprintf("%.2fμs", float64(d.Nanoseconds())/1000)
+	} else if d < time.Second {
+		return fmt.Sprintf("%.1fms", float64(d.Nanoseconds())/1000000)
+	} else {
+		return fmt.Sprintf("%.2fs", d.Seconds())
+	}
+}
