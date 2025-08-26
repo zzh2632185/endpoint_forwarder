@@ -11,6 +11,7 @@ import (
 
 	"endpoint_forwarder/config"
 	"endpoint_forwarder/internal/endpoint"
+	"endpoint_forwarder/internal/transport"
 )
 
 // Context key for endpoint information
@@ -91,9 +92,15 @@ func (h *Handler) handleRegularRequest(ctx context.Context, w http.ResponseWrite
 		// Copy headers from original request
 		h.copyHeaders(r, req, ep)
 
-		// Create HTTP client with timeout
+		// Create HTTP client with timeout and proxy support
+		httpTransport, err := transport.CreateTransport(h.config)
+		if err != nil {
+			return fmt.Errorf("failed to create transport: %w", err)
+		}
+		
 		client := &http.Client{
-			Timeout: ep.Config.Timeout,
+			Timeout:   ep.Config.Timeout,
+			Transport: httpTransport,
 		}
 
 		// Make the request

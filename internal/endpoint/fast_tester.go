@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"endpoint_forwarder/config"
+	"endpoint_forwarder/internal/transport"
 )
 
 // FastTestResult represents the result of a fast endpoint test
@@ -29,10 +30,19 @@ type FastTester struct {
 
 // NewFastTester creates a new fast tester
 func NewFastTester(cfg *config.Config) *FastTester {
+	// Create transport with proxy support
+	httpTransport, err := transport.CreateTransport(cfg)
+	if err != nil {
+		slog.Error("❌ Failed to create HTTP transport with proxy for fast tester", "error", err.Error())
+		// Fall back to default transport
+		httpTransport = &http.Transport{}
+	}
+	
 	return &FastTester{
 		config: cfg,
 		client: &http.Client{
-			Timeout: cfg.Strategy.FastTestTimeout,
+			Timeout:   cfg.Strategy.FastTestTimeout,
+			Transport: httpTransport,
 		},
 		resultCache: make(map[string]*FastTestResult),
 	}

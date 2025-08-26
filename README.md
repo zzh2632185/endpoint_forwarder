@@ -141,6 +141,38 @@ endpoints:
 - If headers specified → merge with first endpoint's headers (your headers override)
 - Headers with same key → your value takes precedence
 
+### Proxy Configuration
+```yaml
+proxy:
+  enabled: true
+  type: "http"  # "http", "https", or "socks5"
+  
+  # Option 1: Complete proxy URL
+  url: "http://proxy.example.com:8080"
+  # url: "socks5://proxy.example.com:1080"
+  
+  # Option 2: Host and port (alternative to URL)
+  host: "proxy.example.com"
+  port: 8080
+  
+  # Optional authentication
+  username: "proxy_user"
+  password: "proxy_pass"
+```
+
+**Proxy Support:**
+- **HTTP/HTTPS Proxy**: Standard HTTP proxy with optional authentication
+- **SOCKS5 Proxy**: Full SOCKS5 support with optional authentication  
+- **Flexible Configuration**: Use complete URL or separate host:port
+- **Security**: Proxy credentials are handled securely
+- **Performance**: Optimized transport layer for all proxy types
+
+**Usage Notes:**
+- All outbound requests (health checks, fast tests, and API calls) use the configured proxy
+- Proxy settings apply globally to all endpoints
+- For corporate environments, ensure proxy allows HTTPS CONNECT method
+- SOCKS5 proxies provide better performance for high-throughput scenarios
+
 ## Monitoring Endpoints
 
 The forwarder provides several monitoring endpoints:

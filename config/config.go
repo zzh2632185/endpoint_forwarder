@@ -9,12 +9,13 @@ import (
 )
 
 type Config struct {
-	Server   ServerConfig    `yaml:"server"`
-	Strategy StrategyConfig  `yaml:"strategy"`
-	Retry    RetryConfig     `yaml:"retry"`
-	Health   HealthConfig    `yaml:"health"`
-	Logging  LoggingConfig   `yaml:"logging"`
+	Server    ServerConfig    `yaml:"server"`
+	Strategy  StrategyConfig  `yaml:"strategy"`
+	Retry     RetryConfig     `yaml:"retry"`
+	Health    HealthConfig    `yaml:"health"`
+	Logging   LoggingConfig   `yaml:"logging"`
 	Streaming StreamingConfig `yaml:"streaming"`
+	Proxy     ProxyConfig     `yaml:"proxy"`
 	Endpoints []EndpointConfig `yaml:"endpoints"`
 }
 
@@ -53,6 +54,16 @@ type StreamingConfig struct {
 	HeartbeatInterval time.Duration `yaml:"heartbeat_interval"`
 	ReadTimeout       time.Duration `yaml:"read_timeout"`
 	MaxIdleTime       time.Duration `yaml:"max_idle_time"`
+}
+
+type ProxyConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	Type     string `yaml:"type"`     // "http", "https", "socks5"
+	URL      string `yaml:"url"`      // Complete proxy URL
+	Host     string `yaml:"host"`     // Proxy host
+	Port     int    `yaml:"port"`     // Proxy port
+	Username string `yaml:"username"` // Optional auth username
+	Password string `yaml:"password"` // Optional auth password
 }
 
 type EndpointConfig struct {
@@ -139,10 +150,10 @@ func (c *Config) setDefaults() {
 		c.Streaming.HeartbeatInterval = 30 * time.Second
 	}
 	if c.Streaming.ReadTimeout == 0 {
-		c.Streaming.ReadTimeout = 1 * time.Second
+		c.Streaming.ReadTimeout = 10 * time.Second
 	}
 	if c.Streaming.MaxIdleTime == 0 {
-		c.Streaming.MaxIdleTime = 25 * time.Second
+		c.Streaming.MaxIdleTime = 120 * time.Second
 	}
 
 	// Set default timeouts for endpoints and handle parameter inheritance
@@ -202,6 +213,19 @@ func (c *Config) validate() error {
 
 	if c.Strategy.Type != "priority" && c.Strategy.Type != "fastest" {
 		return fmt.Errorf("strategy type must be 'priority' or 'fastest'")
+	}
+
+	// Validate proxy configuration
+	if c.Proxy.Enabled {
+		if c.Proxy.Type == "" {
+			return fmt.Errorf("proxy type is required when proxy is enabled")
+		}
+		if c.Proxy.Type != "http" && c.Proxy.Type != "https" && c.Proxy.Type != "socks5" {
+			return fmt.Errorf("proxy type must be 'http', 'https', or 'socks5'")
+		}
+		if c.Proxy.URL == "" && (c.Proxy.Host == "" || c.Proxy.Port == 0) {
+			return fmt.Errorf("proxy URL or host:port must be specified when proxy is enabled")
+		}
 	}
 
 	for i, endpoint := range c.Endpoints {

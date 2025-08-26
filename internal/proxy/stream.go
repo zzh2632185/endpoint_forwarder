@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"endpoint_forwarder/internal/endpoint"
+	"endpoint_forwarder/internal/transport"
 )
 
 // handleSSERequest handles Server-Sent Events streaming requests
@@ -89,24 +90,29 @@ func (h *Handler) streamFromEndpoint(ctx context.Context, w http.ResponseWriter,
 	// Copy headers
 	h.copyHeaders(r, req, ep)
 
-	// Create HTTP client optimized for real-time streaming
+	// Create HTTP client optimized for real-time streaming with proxy support
+	httpTransport, err := transport.CreateTransport(h.config)
+	if err != nil {
+		return fmt.Errorf("failed to create transport: %w", err)
+	}
+	
+	// Optimize transport for streaming
+	httpTransport.DisableKeepAlives = false
+	httpTransport.MaxIdleConns = 10
+	httpTransport.MaxIdleConnsPerHost = 2
+	httpTransport.IdleConnTimeout = 0 // No idle timeout
+	httpTransport.TLSHandshakeTimeout = 10 * time.Second
+	httpTransport.ExpectContinueTimeout = 1 * time.Second
+	httpTransport.ResponseHeaderTimeout = 15 * time.Second // Reduced for faster response
+	// Critical: Disable compression to prevent buffering delays
+	httpTransport.DisableCompression = true
+	// Set smaller buffer sizes for lower latency
+	httpTransport.WriteBufferSize = 4096 // Smaller write buffer
+	httpTransport.ReadBufferSize = 4096  // Smaller read buffer
+	
 	client := &http.Client{
-		Timeout: 0, // No timeout for streaming
-		Transport: &http.Transport{
-			// Optimize for streaming performance
-			DisableKeepAlives:     false,
-			MaxIdleConns:          10,
-			MaxIdleConnsPerHost:   2,
-			IdleConnTimeout:       0,    // No idle timeout
-			TLSHandshakeTimeout:   10 * time.Second,
-			ExpectContinueTimeout: 1 * time.Second,
-			ResponseHeaderTimeout: 15 * time.Second, // Reduced for faster response
-			// Critical: Disable compression to prevent buffering delays
-			DisableCompression: true,
-			// Set smaller buffer sizes for lower latency
-			WriteBufferSize: 4096,  // Smaller write buffer
-			ReadBufferSize:  4096,  // Smaller read buffer
-		},
+		Timeout:   0, // No timeout for streaming
+		Transport: httpTransport,
 	}
 
 	// Make the request

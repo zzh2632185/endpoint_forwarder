@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"endpoint_forwarder/config"
+	"endpoint_forwarder/internal/transport"
 )
 
 // EndpointStatus represents the health status of an endpoint
@@ -42,10 +43,25 @@ type Manager struct {
 func NewManager(cfg *config.Config) *Manager {
 	ctx, cancel := context.WithCancel(context.Background())
 	
+	// Create transport with proxy support
+	httpTransport, err := transport.CreateTransport(cfg)
+	if err != nil {
+		slog.Error("❌ Failed to create HTTP transport with proxy", "error", err.Error())
+		// Fall back to default transport
+		httpTransport = &http.Transport{}
+	}
+	
+	// Log proxy configuration
+	if cfg.Proxy.Enabled {
+		proxyInfo := transport.GetProxyInfo(cfg)
+		slog.Info("🌐 Proxy configuration enabled", "proxy", proxyInfo)
+	}
+	
 	manager := &Manager{
 		config: cfg,
 		client: &http.Client{
-			Timeout: cfg.Health.Timeout,
+			Timeout:   cfg.Health.Timeout,
+			Transport: httpTransport,
 		},
 		ctx:        ctx,
 		cancel:     cancel,

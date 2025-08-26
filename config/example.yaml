@@ -1,40 +1,94 @@
 # Claude Request Forwarder Configuration
+# 完整配置示例，展示所有可用的配置选项
 
+# 服务器配置
 server:
-  host: "127.0.0.1"
-  port: 8087
+  host: "127.0.0.1"      # 监听地址，默认: localhost
+  port: 8087             # 监听端口，默认: 8080
 
-# Routing strategy: "priority" or "fastest"
+# 路由策略配置
 strategy:
-  type: "fastest"
-  fast_test_enabled: true
-  fast_test_cache_ttl: "30s"
-  fast_test_timeout: "5s"
+  type: "fastest"                  # 路由策略: "priority" (优先级) 或 "fastest" (最快响应)
+  fast_test_enabled: true          # 启用快速测试 (仅在 fastest 策略下生效)
+  fast_test_cache_ttl: "30s"       # 快速测试结果缓存时间，默认: 3s
+  fast_test_timeout: "5s"          # 快速测试超时时间，默认: 1s  
+  fast_test_path: "/v1/models"     # 快速测试路径，默认使用健康检查路径
 
-# Retry configuration
+# 重试配置
 retry:
-  max_attempts: 3
-  base_delay: "1s"
-  max_delay: "30s"
-  multiplier: 2.0
+  max_attempts: 3        # 最大重试次数，默认: 3
+  base_delay: "1s"       # 基础延迟时间，默认: 1s
+  max_delay: "30s"       # 最大延迟时间，默认: 30s
+  multiplier: 2.0        # 延迟倍数，默认: 2.0
 
-# Health check configuration
+# 健康检查配置
 health:
-  check_interval: "30s"
-  timeout: "5s"
-  health_path: "/v1/models"
+  check_interval: "30s"  # 健康检查间隔，默认: 30s
+  timeout: "5s"          # 健康检查超时，默认: 5s
+  health_path: "/v1/models"  # 健康检查路径，默认: /v1/models
 
-# Logging configuration
+# 日志配置
 logging:
-  level: "info"
-  format: "json"
+  level: "info"          # 日志级别: debug, info, warn, error，默认: info
+  format: "json"         # 日志格式: "json" 或 "text"，默认: text
 
-# Endpoint configurations
+# 流式传输配置
+streaming:
+  heartbeat_interval: "30s"  # 心跳间隔，默认: 30s
+  read_timeout: "10s"         # 读取超时，默认: 1s
+  max_idle_time: "120s"      # 最大空闲时间，默认: 120s
+
+# 代理配置 (可选)
+proxy:
+  enabled: false              # 是否启用代理
+  type: "http"               # 代理类型: "http", "https", 或 "socks5"
+  
+  # 方式一: 完整代理 URL
+  # url: "http://proxy.example.com:8080"
+  # url: "https://proxy.example.com:8080"
+  # url: "socks5://proxy.example.com:1080"
+  
+  # 方式二: 分别指定主机和端口
+  host: "proxy.example.com"   # 代理主机
+  port: 8080                  # 代理端口
+  
+  # 可选的认证信息
+  # username: "proxy_user"    # 代理用户名
+  # password: "proxy_pass"    # 代理密码
+
+# 端点配置
 endpoints:
-  - name: "example"
-    url: "https://example.com"
-    priority: 1
-    timeout: "30s"
-    token: "sk-"
+  # 主要端点 - 其他端点会继承此端点的 token 和 headers (如果未指定)
+  - name: "primary"
+    url: "https://api.openai.com/v1/chat/completions"
+    priority: 1              # 优先级 (数字越小优先级越高)
+    timeout: "30s"           # 请求超时时间，默认: 30s
+    token: "sk-your-openai-api-key"  # API 密钥
+    headers:                 # 自定义请求头
+      User-Agent: "Claude-Request-Forwarder/1.0"
+      X-Custom-Header: "custom-value"
 
+  # 备用端点 1 - 会继承主要端点的 token 和 headers
+  - name: "backup1"
+    url: "https://api.anthropic.com/v1/messages"
+    priority: 2
+    timeout: "25s"
+    # token 和 headers 会从第一个端点继承
 
+  # 备用端点 2 - 使用不同的 token 和 headers
+  - name: "backup2"
+    url: "https://api.example.com/v1/chat"
+    priority: 3
+    timeout: "20s"
+    token: "sk-different-api-key"  # 覆盖继承的 token
+    headers:
+      Authorization: "Bearer custom-token"
+      X-API-Version: "2024-01"
+      # 其他 headers 仍会从第一个端点继承并与此处合并
+
+  # 本地端点示例
+  - name: "local"
+    url: "http://localhost:11434/v1/chat/completions"
+    priority: 4
+    timeout: "60s"
+    # 本地服务通常不需要 token
