@@ -256,6 +256,8 @@ func (m *Manager) healthCheckLoop() {
 
 // performHealthChecks performs health checks on all endpoints
 func (m *Manager) performHealthChecks() {
+	slog.Debug(fmt.Sprintf("🩺 [健康检查] 开始检查 %d 个端点", len(m.endpoints)))
+	
 	var wg sync.WaitGroup
 	
 	for _, endpoint := range m.endpoints {
@@ -267,6 +269,16 @@ func (m *Manager) performHealthChecks() {
 	}
 	
 	wg.Wait()
+	
+	// Count healthy endpoints after checks
+	healthyCount := 0
+	for _, ep := range m.endpoints {
+		if ep.IsHealthy() {
+			healthyCount++
+		}
+	}
+	
+	slog.Debug(fmt.Sprintf("🩺 [健康检查] 完成检查 - 健康: %d/%d", healthyCount, len(m.endpoints)))
 }
 
 // checkEndpointHealth checks the health of a single endpoint
@@ -289,6 +301,9 @@ func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
 	responseTime := time.Since(start)
 	
 	if err != nil {
+		// Network or connection error
+		slog.Warn(fmt.Sprintf("❌ [健康检查] 端点网络错误: %s - 错误: %s, 响应时间: %dms", 
+			endpoint.Config.Name, err.Error(), responseTime.Milliseconds()))
 		m.updateEndpointStatus(endpoint, false, responseTime)
 		return
 	}
@@ -303,17 +318,15 @@ func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
 	
 	// Log health check results
 	if healthy {
-		slog.Debug("✅ Health check passed",
-			"endpoint", endpoint.Config.Name,
-			"url", endpoint.Config.URL,
-			"status_code", resp.StatusCode,
-			"response_time_ms", responseTime.Milliseconds())
+		slog.Debug(fmt.Sprintf("✅ [健康检查] 端点正常: %s - 状态码: %d, 响应时间: %dms",
+			endpoint.Config.Name,
+			resp.StatusCode,
+			responseTime.Milliseconds()))
 	} else {
-		slog.Warn("❌ Health check failed",
-			"endpoint", endpoint.Config.Name,
-			"url", endpoint.Config.URL,
-			"status_code", resp.StatusCode,
-			"response_time_ms", responseTime.Milliseconds())
+		slog.Warn(fmt.Sprintf("⚠️ [健康检查] 端点异常: %s - 状态码: %d, 响应时间: %dms",
+			endpoint.Config.Name,
+			resp.StatusCode,
+			responseTime.Milliseconds()))
 	}
 	
 	m.updateEndpointStatus(endpoint, healthy, responseTime)
@@ -328,13 +341,31 @@ func (m *Manager) updateEndpointStatus(endpoint *Endpoint, healthy bool, respons
 	endpoint.Status.ResponseTime = responseTime
 	
 	if healthy {
+		// Endpoint is healthy
+		wasUnhealthy := !endpoint.Status.Healthy
 		endpoint.Status.Healthy = true
 		endpoint.Status.ConsecutiveFails = 0
+		
+		// Log recovery if endpoint was previously unhealthy
+		if wasUnhealthy {
+			slog.Info(fmt.Sprintf("✅ [健康检查] 端点恢复正常: %s - 响应时间: %dms", 
+				endpoint.Config.Name, responseTime.Milliseconds()))
+		}
 	} else {
+		// Endpoint failed health check
 		endpoint.Status.ConsecutiveFails++
-		// Mark as unhealthy after 2 consecutive failures
-		if endpoint.Status.ConsecutiveFails >= 2 {
-			endpoint.Status.Healthy = false
+		wasHealthy := endpoint.Status.Healthy
+		
+		// Mark as unhealthy immediately on any failure
+		endpoint.Status.Healthy = false
+		
+		// Log the failure
+		if wasHealthy {
+			slog.Warn(fmt.Sprintf("❌ [健康检查] 端点标记为不可用: %s - 连续失败: %d次, 响应时间: %dms", 
+				endpoint.Config.Name, endpoint.Status.ConsecutiveFails, responseTime.Milliseconds()))
+		} else {
+			slog.Debug(fmt.Sprintf("❌ [健康检查] 端点仍然不可用: %s - 连续失败: %d次, 响应时间: %dms", 
+				endpoint.Config.Name, endpoint.Status.ConsecutiveFails, responseTime.Milliseconds()))
 		}
 	}
 }
