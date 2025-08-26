@@ -19,11 +19,25 @@ import (
 
 var (
 	configPath = flag.String("config", "config/example.yaml", "Path to configuration file")
-	version    = "1.0.0" // Can be set during build
+	showVersion = flag.Bool("version", false, "Show version information")
+	
+	// Build-time variables (set via ldflags)
+	version = "dev"
+	commit  = "unknown"
+	date    = "unknown"
 )
 
 func main() {
 	flag.Parse()
+
+	// Handle version flag
+	if *showVersion {
+		fmt.Printf("Claude Request Forwarder\n")
+		fmt.Printf("Version: %s\n", version)
+		fmt.Printf("Commit: %s\n", commit)
+		fmt.Printf("Built: %s\n", date)
+		os.Exit(0)
+	}
 
 	// Load configuration
 	cfg, err := config.LoadConfig(*configPath)
@@ -38,6 +52,8 @@ func main() {
 
 	logger.Info("🚀 Claude Request Forwarder 启动中...",
 		"version", version,
+		"commit", commit,
+		"build_date", date,
 		"config_file", *configPath,
 		"endpoints_count", len(cfg.Endpoints),
 		"strategy", cfg.Strategy.Type)
