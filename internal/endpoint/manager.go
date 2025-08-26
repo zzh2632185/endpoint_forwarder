@@ -91,6 +91,11 @@ func (m *Manager) GetHealthyEndpoints() []*Endpoint {
 		endpoint.mutex.RUnlock()
 	}
 
+	return m.sortHealthyEndpoints(healthy, true) // Show logs by default
+}
+
+// sortHealthyEndpoints sorts healthy endpoints based on strategy with optional logging
+func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*Endpoint {
 	// Sort based on strategy
 	switch m.config.Strategy.Type {
 	case "priority":
@@ -98,8 +103,8 @@ func (m *Manager) GetHealthyEndpoints() []*Endpoint {
 			return healthy[i].Config.Priority < healthy[j].Config.Priority
 		})
 	case "fastest":
-		// Log endpoint latencies for fastest strategy
-		if len(healthy) > 1 {
+		// Log endpoint latencies for fastest strategy (only if showLogs is true)
+		if len(healthy) > 1 && showLogs {
 			slog.Info("📊 [Fastest Strategy] 基于健康检查的端点延迟排序:")
 			for _, ep := range healthy {
 				ep.mutex.RLock()
@@ -124,19 +129,40 @@ func (m *Manager) GetHealthyEndpoints() []*Endpoint {
 
 // GetFastestEndpointsWithRealTimeTest returns endpoints sorted by real-time testing
 func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*Endpoint {
-	// First get healthy endpoints from regular health checks
-	healthy := m.GetHealthyEndpoints()
+	// First get basic healthy endpoints list without logging
+	var healthy []*Endpoint
+	
+	for _, endpoint := range m.endpoints {
+		endpoint.mutex.RLock()
+		if endpoint.Status.Healthy {
+			healthy = append(healthy, endpoint)
+		}
+		endpoint.mutex.RUnlock()
+	}
+	
 	if len(healthy) == 0 {
 		return healthy
 	}
 
-	// If not using fastest strategy or fast test disabled, return regular healthy endpoints
+	// If not using fastest strategy or fast test disabled, apply sorting with logging
 	if m.config.Strategy.Type != "fastest" || !m.config.Strategy.FastTestEnabled {
-		return healthy
+		return m.sortHealthyEndpoints(healthy, true) // Show logs
 	}
 
-	// Perform parallel fast testing
+	// Check if we have cached fast test results first
 	testResults, usedCache := m.fastTester.TestEndpointsParallel(ctx, healthy)
+	
+	// Only show health check sorting if we're NOT using cache
+	if !usedCache && m.config.Strategy.Type == "fastest" && len(healthy) > 1 {
+		slog.InfoContext(ctx, "📊 [Fastest Strategy] 基于健康检查的端点延迟排序:")
+		for _, ep := range healthy {
+			ep.mutex.RLock()
+			responseTime := ep.Status.ResponseTime
+			ep.mutex.RUnlock()
+			slog.InfoContext(ctx, fmt.Sprintf("  ⏱️ %s - 延迟: %dms (来源: 定期健康检查)", 
+				ep.Config.Name, responseTime.Milliseconds()))
+		}
+	}
 	
 	// Log ALL test results first (including failures) - but only if cache wasn't used
 	if len(testResults) > 0 && !usedCache {
@@ -199,7 +225,7 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 			fastestEndpoint.Config.Name, fastestTime, cacheIndicator))
 		
 		// Show other available endpoints if there are more than one
-		if len(endpoints) > 1 {
+		if len(endpoints) > 1 && !usedCache {
 			slog.InfoContext(ctx, "📋 [备用端点] 其他可用端点:")
 			for i := 1; i < len(endpoints); i++ {
 				ep := endpoints[i]
