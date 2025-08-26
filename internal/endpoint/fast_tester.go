@@ -60,7 +60,7 @@ func (ft *FastTester) TestEndpointsParallel(ctx context.Context, endpoints []*En
 	// Check cache first
 	cachedResults := ft.getCachedResults(endpoints)
 	if len(cachedResults) == len(endpoints) {
-		slog.Debug("📋 Using cached fast test results",
+		slog.Info("📋 Using cached fast test results",
 			"cached_endpoints", len(cachedResults),
 			"cache_ttl", ft.config.Strategy.FastTestCacheTTL)
 		return cachedResults

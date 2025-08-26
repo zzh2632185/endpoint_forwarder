@@ -82,6 +82,23 @@ func main() {
 			serverErr <- err
 		}
 	}()
+	
+	// Give server a moment to start
+	time.Sleep(100 * time.Millisecond)
+	
+	// Check if server started successfully
+	select {
+	case err := <-serverErr:
+		logger.Error("❌ 服务器启动失败", "error", err)
+		os.Exit(1)
+	default:
+		// Server started successfully
+		baseURL := fmt.Sprintf("http://%s:%d", cfg.Server.Host, cfg.Server.Port)
+		logger.Info("✅ 服务器启动成功！")
+		logger.Info("📋 配置说明：请在 Claude Code 的 settings.json 中设置")
+		logger.Info("🔧 ANTHROPIC_BASE_URL: " + baseURL)
+		logger.Info("📡 服务器地址: " + baseURL)
+	}
 
 	// Wait for interrupt signal
 	interrupt := make(chan os.Signal, 1)
@@ -90,7 +107,7 @@ func main() {
 	// Block until we receive a signal or server error
 	select {
 	case err := <-serverErr:
-		logger.Error("❌ 服务器启动失败", "error", err)
+		logger.Error("❌ 服务器运行时错误", "error", err)
 		os.Exit(1)
 	case sig := <-interrupt:
 		logger.Info("📡 收到终止信号，开始优雅关闭...", "signal", sig)
