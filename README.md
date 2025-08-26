@@ -74,6 +74,16 @@ health:
   health_path: "/v1/models" # Health check endpoint path
 ```
 
+### Global Timeout Configuration
+```yaml
+global_timeout: "300s"      # Default timeout for all non-streaming requests (5 minutes)
+```
+
+**Usage:**
+- Sets the default timeout for all endpoints that don't specify their own `timeout`
+- Only applies to non-streaming requests
+- Can be overridden by individual endpoint `timeout` settings
+
 **Health Check Behavior:**
 - **Endpoint**: Tests the `/v1/models` endpoint (suitable for Claude API)
 - **Success Criteria**: Accepts both 2xx (success) and 4xx (client error) status codes
@@ -100,7 +110,7 @@ For convenience, subsequent endpoints can inherit configuration from the first e
 
 **Inheritable Parameters:**
 - `token`: Authentication token
-- `timeout`: Request timeout duration  
+- `timeout`: Request timeout duration (defaults to `global_timeout` if not specified)
 - `headers`: HTTP headers (with smart merging)
 
 ```yaml

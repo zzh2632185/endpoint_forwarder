@@ -38,6 +38,9 @@ streaming:
   read_timeout: "10s"         # 读取超时，默认: 1s
   max_idle_time: "120s"      # 最大空闲时间，默认: 120s
 
+# 全局超时配置
+global_timeout: "300s"       # 非流式请求的全局默认超时时间，默认: 300s (5分钟)
+
 # 代理配置 (可选)
 proxy:
   enabled: false              # 是否启用代理
@@ -62,7 +65,7 @@ endpoints:
   - name: "primary"
     url: "https://api.openai.com/v1/chat/completions"
     priority: 1              # 优先级 (数字越小优先级越高)
-    timeout: "30s"           # 请求超时时间，默认: 30s
+    timeout: "300s"           # 请求超时时间，如果不设置则使用 global_timeout
     token: "sk-your-openai-api-key"  # API 密钥
     headers:                 # 自定义请求头
       User-Agent: "Claude-Request-Forwarder/1.0"
@@ -72,14 +75,14 @@ endpoints:
   - name: "backup1"
     url: "https://api.anthropic.com/v1/messages"
     priority: 2
-    timeout: "25s"
+    timeout: "300s"
     # token 和 headers 会从第一个端点继承
 
   # 备用端点 2 - 使用不同的 token 和 headers
   - name: "backup2"
     url: "https://api.example.com/v1/chat"
     priority: 3
-    timeout: "20s"
+    timeout: "300s"
     token: "sk-different-api-key"  # 覆盖继承的 token
     headers:
       Authorization: "Bearer custom-token"
@@ -90,5 +93,5 @@ endpoints:
   - name: "local"
     url: "http://localhost:11434/v1/chat/completions"
     priority: 4
-    timeout: "60s"
+    timeout: "300s"
     # 本地服务通常不需要 token

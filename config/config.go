@@ -9,14 +9,15 @@ import (
 )
 
 type Config struct {
-	Server    ServerConfig    `yaml:"server"`
-	Strategy  StrategyConfig  `yaml:"strategy"`
-	Retry     RetryConfig     `yaml:"retry"`
-	Health    HealthConfig    `yaml:"health"`
-	Logging   LoggingConfig   `yaml:"logging"`
-	Streaming StreamingConfig `yaml:"streaming"`
-	Proxy     ProxyConfig     `yaml:"proxy"`
-	Endpoints []EndpointConfig `yaml:"endpoints"`
+	Server       ServerConfig     `yaml:"server"`
+	Strategy     StrategyConfig   `yaml:"strategy"`
+	Retry        RetryConfig      `yaml:"retry"`
+	Health       HealthConfig     `yaml:"health"`
+	Logging      LoggingConfig    `yaml:"logging"`
+	Streaming    StreamingConfig  `yaml:"streaming"`
+	Proxy        ProxyConfig      `yaml:"proxy"`
+	GlobalTimeout time.Duration   `yaml:"global_timeout"` // Global timeout for non-streaming requests
+	Endpoints    []EndpointConfig `yaml:"endpoints"`
 }
 
 type ServerConfig struct {
@@ -156,6 +157,11 @@ func (c *Config) setDefaults() {
 		c.Streaming.MaxIdleTime = 120 * time.Second
 	}
 
+	// Set global timeout default
+	if c.GlobalTimeout == 0 {
+		c.GlobalTimeout = 300 * time.Second // Default 5 minutes for non-streaming requests
+	}
+
 	// Set default timeouts for endpoints and handle parameter inheritance
 	var defaultEndpoint *EndpointConfig
 	if len(c.Endpoints) > 0 {
@@ -169,8 +175,8 @@ func (c *Config) setDefaults() {
 				// Inherit timeout from first endpoint
 				c.Endpoints[i].Timeout = defaultEndpoint.Timeout
 			} else {
-				// Use global default
-				c.Endpoints[i].Timeout = 30 * time.Second
+				// Use global timeout setting
+				c.Endpoints[i].Timeout = c.GlobalTimeout
 			}
 		}
 		
