@@ -331,6 +331,13 @@ func (cw *ConfigWatcher) GetConfig() *Config {
 	return cw.config
 }
 
+// UpdateLogger updates the logger used by the config watcher
+func (cw *ConfigWatcher) UpdateLogger(logger *slog.Logger) {
+	cw.mutex.Lock()
+	defer cw.mutex.Unlock()
+	cw.logger = logger
+}
+
 // AddReloadCallback adds a callback function that will be called when config is reloaded
 func (cw *ConfigWatcher) AddReloadCallback(callback func(*Config)) {
 	cw.mutex.Lock()

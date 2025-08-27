@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strings"
 	"sync"
@@ -25,14 +26,19 @@ type OverviewView struct {
 	monitoringMiddleware *middleware.MonitoringMiddleware
 	endpointManager     *endpoint.Manager
 	responseTimeHistory []time.Duration
+	lastMetricsHash     string // Track metrics content changes
+	lastEndpointsHash   string // Track endpoints content changes  
+	lastSystemHash      string // Track system content changes
+	startTime           time.Time // App start time for uptime calculation
 }
 
 // NewOverviewView creates a new overview view
-func NewOverviewView(monitoringMiddleware *middleware.MonitoringMiddleware, endpointManager *endpoint.Manager) *OverviewView {
+func NewOverviewView(monitoringMiddleware *middleware.MonitoringMiddleware, endpointManager *endpoint.Manager, startTime time.Time) *OverviewView {
 	view := &OverviewView{
 		monitoringMiddleware: monitoringMiddleware,
 		endpointManager:     endpointManager,
 		responseTimeHistory: make([]time.Duration, 0, 60),
+		startTime:           startTime,
 	}
 	view.setupUI()
 	return view
@@ -71,7 +77,7 @@ func (v *OverviewView) GetPrimitive() tview.Primitive {
 func (v *OverviewView) Update() {
 	metrics := v.monitoringMiddleware.GetMetrics().GetMetrics()
 	
-	// Update metrics
+	// Update metrics with content change detection
 	avgTime := formatDurationShort(metrics.GetAverageResponseTime())
 	successRate := metrics.GetSuccessRate()
 	
@@ -84,9 +90,13 @@ func (v *OverviewView) Update() {
 		metrics.FailedRequests, 100-successRate,
 		avgTime)
 
-	v.metricsBox.SetText(metricsText)
+	// Only update metrics if content changed
+	if metricsText != v.lastMetricsHash {
+		v.lastMetricsHash = metricsText
+		v.metricsBox.SetText(metricsText)
+	}
 	
-	// Simple chart placeholder
+	// Simple chart placeholder (static content, no need to check changes)
 	v.chartBox.SetText("[gray]Response time trending...\n[green]████████░░[white] Low\n[yellow]██████░░░░[white] Med\n[red]███░░░░░░░[white] High")
 	
 	// Endpoints status - maintain consistent formatting
@@ -127,15 +137,27 @@ func (v *OverviewView) Update() {
 		statusText.WriteString("[gray]... and more[white]")
 	}
 	
-	v.endpointsBox.SetText(statusText.String())
+	// Only update endpoints if content changed
+	endpointsContent := statusText.String()
+	if endpointsContent != v.lastEndpointsHash {
+		v.lastEndpointsHash = endpointsContent
+		v.endpointsBox.SetText(endpointsContent)
+	}
 	
-	// System info - fixed width formatting (removed uptime component)
+	// System info - fixed width formatting
+	uptime := time.Since(v.startTime)
 	systemText := fmt.Sprintf(`[white::b]Active Connections:[white::-] [cyan]%6d[white]
-[white::b]Total Connections:[white::-] [cyan]%7d[white]`,
+[white::b]Total Connections:[white::-] [cyan]%7d[white]
+[white::b]Uptime:[white::-] [cyan]%8s[white]`,
 		len(metrics.ActiveConnections),
-		len(metrics.ActiveConnections)+len(metrics.ConnectionHistory))
+		len(metrics.ActiveConnections)+len(metrics.ConnectionHistory),
+		formatUptimeShort(uptime))
 
-	v.systemBox.SetText(systemText)
+	// Only update system info if content changed
+	if systemText != v.lastSystemHash {
+		v.lastSystemHash = systemText
+		v.systemBox.SetText(systemText)
+	}
 }
 
 // EndpointsView represents the endpoints tab
@@ -145,6 +167,8 @@ type EndpointsView struct {
 	detailBox           *tview.TextView
 	monitoringMiddleware *middleware.MonitoringMiddleware
 	endpointManager     *endpoint.Manager
+	selectedRow         int
+	lastDetailHash      string // Track detail content changes
 }
 
 func NewEndpointsView(monitoringMiddleware *middleware.MonitoringMiddleware, endpointManager *endpoint.Manager) *EndpointsView {
@@ -159,6 +183,14 @@ func NewEndpointsView(monitoringMiddleware *middleware.MonitoringMiddleware, end
 func (v *EndpointsView) setupUI() {
 	v.table = tview.NewTable().SetBorders(true).SetSelectable(true, false)
 	v.table.SetBorder(true).SetTitle(" 🎯 Endpoints ").SetTitleAlign(tview.AlignLeft)
+	
+	// Set up table selection change handler (auto-update on row change)
+	v.table.SetSelectionChangedFunc(func(row, column int) {
+		if row > 0 { // Skip header row
+			v.selectedRow = row
+			v.updateDetails()
+		}
+	})
 	
 	v.detailBox = tview.NewTextView().SetDynamicColors(true).SetScrollable(true)
 	v.detailBox.SetBorder(true).SetTitle(" 📊 Details ").SetTitleAlign(tview.AlignLeft)
@@ -180,7 +212,12 @@ func (v *EndpointsView) GetPrimitive() tview.Primitive {
 
 func (v *EndpointsView) Update() {
 	v.updateTable()
-	v.detailBox.SetText("[gray]Select an endpoint to view details[white]")
+	// Update details for currently selected row
+	if v.selectedRow > 0 {
+		v.updateDetails()
+	} else {
+		v.detailBox.SetText("[gray]Select an endpoint to view details[white]\n\n[yellow]Use arrow keys to navigate[white]")
+	}
 }
 
 // updateTable updates the endpoints table efficiently
@@ -245,6 +282,91 @@ func (v *EndpointsView) updateTable() {
 			}
 		}
 	}
+	
+	// Auto-select first row if no row is selected and endpoints exist
+	if v.selectedRow == 0 && len(endpoints) > 0 {
+		v.table.Select(1, 0) // Select first data row (row 1, column 0)
+		v.selectedRow = 1
+	}
+}
+
+// updateDetails updates the detail view for the selected endpoint
+func (v *EndpointsView) updateDetails() {
+	endpoints := v.endpointManager.GetAllEndpoints()
+	metrics := v.monitoringMiddleware.GetMetrics().GetMetrics()
+	
+	// Check if selected row is valid
+	if v.selectedRow <= 0 || v.selectedRow > len(endpoints) {
+		return
+	}
+	
+	endpoint := endpoints[v.selectedRow-1] // Subtract 1 for header row
+	status := endpoint.GetStatus()
+	
+	var detailText strings.Builder
+	detailText.WriteString(fmt.Sprintf("[blue::b]🎯 %s[white::-]\n\n", endpoint.Config.Name))
+	
+	// Basic Info
+	detailText.WriteString("[yellow::b]Basic Information[white::-]\n")
+	detailText.WriteString(fmt.Sprintf("URL: [cyan]%s[white]\n", endpoint.Config.URL))
+	detailText.WriteString(fmt.Sprintf("Priority: [cyan]%d[white]\n", endpoint.Config.Priority))
+	detailText.WriteString(fmt.Sprintf("Timeout: [cyan]%v[white]\n", endpoint.Config.Timeout))
+	
+	// Health Status
+	detailText.WriteString("\n[yellow::b]Health Status[white::-]\n")
+	healthStatus := "[red]Unhealthy[white]"
+	healthIcon := "🔴"
+	if status.Healthy {
+		healthStatus = "[green]Healthy[white]"
+		healthIcon = "🟢"
+	}
+	detailText.WriteString(fmt.Sprintf("Status: %s %s\n", healthIcon, healthStatus))
+	detailText.WriteString(fmt.Sprintf("Response Time: [cyan]%dms[white]\n", status.ResponseTime.Milliseconds()))
+	detailText.WriteString(fmt.Sprintf("Last Check: [cyan]%v[white]\n", status.LastCheck.Format("15:04:05")))
+	detailText.WriteString(fmt.Sprintf("Consecutive Fails: [red]%d[white]\n", status.ConsecutiveFails))
+	
+	// Performance Metrics
+	if endpointStats := metrics.EndpointStats[endpoint.Config.Name]; endpointStats != nil {
+		detailText.WriteString("\n[yellow::b]Performance Metrics[white::-]\n")
+		detailText.WriteString(fmt.Sprintf("Total Requests: [cyan]%d[white]\n", endpointStats.TotalRequests))
+		detailText.WriteString(fmt.Sprintf("Successful: [green]%d[white]\n", endpointStats.SuccessfulRequests))
+		detailText.WriteString(fmt.Sprintf("Failed: [red]%d[white]\n", endpointStats.FailedRequests))
+		detailText.WriteString(fmt.Sprintf("Retries: [yellow]%d[white]\n", endpointStats.RetryCount))
+		
+		if endpointStats.TotalRequests > 0 {
+			avgResponseTime := endpointStats.TotalResponseTime / time.Duration(endpointStats.TotalRequests)
+			successRate := float64(endpointStats.SuccessfulRequests) / float64(endpointStats.TotalRequests) * 100
+			
+			detailText.WriteString(fmt.Sprintf("Success Rate: [cyan]%.1f%%[white]\n", successRate))
+			detailText.WriteString(fmt.Sprintf("Avg Response: [cyan]%s[white]\n", formatDurationShort(avgResponseTime)))
+			detailText.WriteString(fmt.Sprintf("Min Response: [cyan]%s[white]\n", formatDurationShort(endpointStats.MinResponseTime)))
+			detailText.WriteString(fmt.Sprintf("Max Response: [cyan]%s[white]\n", formatDurationShort(endpointStats.MaxResponseTime)))
+		}
+		
+		if !endpointStats.LastUsed.IsZero() {
+			detailText.WriteString(fmt.Sprintf("Last Used: [cyan]%v[white]\n", endpointStats.LastUsed.Format("15:04:05")))
+		}
+	} else {
+		detailText.WriteString("\n[yellow::b]Performance Metrics[white::-]\n")
+		detailText.WriteString("[gray]No requests processed yet[white]\n")
+	}
+	
+	// Connection Info
+	detailText.WriteString("\n[yellow::b]Connection Details[white::-]\n")
+	activeConnections := 0
+	for _, conn := range metrics.ActiveConnections {
+		if conn.Endpoint == endpoint.Config.Name {
+			activeConnections++
+		}
+	}
+	detailText.WriteString(fmt.Sprintf("Active Connections: [cyan]%d[white]\n", activeConnections))
+	
+	// Only update if content changed
+	newContent := detailText.String()
+	if newContent != v.lastDetailHash {
+		v.lastDetailHash = newContent
+		v.detailBox.SetText(newContent)
+	}
 }
 
 // ConnectionsView represents the connections tab
@@ -253,6 +375,8 @@ type ConnectionsView struct {
 	statsBox            *tview.TextView
 	monitoringMiddleware *middleware.MonitoringMiddleware
 	config              *config.Config
+	lastDisplayHash     string // Track content changes to avoid unnecessary updates
+	needsUpdate         bool   // Flag to indicate if data has changed since last display
 }
 
 func NewConnectionsView(monitoringMiddleware *middleware.MonitoringMiddleware, cfg *config.Config) *ConnectionsView {
@@ -278,6 +402,7 @@ func (v *ConnectionsView) GetPrimitive() tview.Primitive {
 func (v *ConnectionsView) Update() {
 	metrics := v.monitoringMiddleware.GetMetrics().GetMetrics()
 	
+	// Build display text
 	var stats strings.Builder
 	stats.WriteString(fmt.Sprintf("[blue::b]📊 Connection Statistics[white::-]\n"))
 	stats.WriteString(fmt.Sprintf("Active: [cyan]%3d[white] | Historical: [cyan]%4d[white]\n\n", 
@@ -307,7 +432,7 @@ func (v *ConnectionsView) Update() {
 		// Display endpoint name and retry count
 		endpointDisplay := conn.Endpoint
 		if endpointDisplay == "" || endpointDisplay == "unknown" {
-			endpointDisplay = "main"
+			endpointDisplay = "pending"
 		}
 		
 		retryDisplay := ""
@@ -336,7 +461,12 @@ func (v *ConnectionsView) Update() {
 		connCount++
 	}
 	
-	v.statsBox.SetText(stats.String())
+	// Only update if content has changed
+	newContent := stats.String()
+	if newContent != v.lastDisplayHash {
+		v.lastDisplayHash = newContent
+		v.statsBox.SetText(newContent)
+	}
 }
 
 // LogEntry represents a log entry
@@ -382,6 +512,13 @@ func (v *LogsView) Update() {
 	v.refreshLogDisplay()
 }
 
+func (v *LogsView) ForceUpdate() {
+	v.mutex.Lock()
+	v.needsUpdate = true // Force update regardless of current state
+	v.mutex.Unlock()
+	v.refreshLogDisplay()
+}
+
 func (v *LogsView) AddLog(level, message, source string) {
 	v.mutex.Lock()
 	defer v.mutex.Unlock()
@@ -398,6 +535,24 @@ func (v *LogsView) AddLog(level, message, source string) {
 		v.logs = v.logs[len(v.logs)-v.maxLogs:]
 	}
 	v.needsUpdate = true
+}
+
+func (v *LogsView) AddLogSilent(level, message, source string) {
+	v.mutex.Lock()
+	defer v.mutex.Unlock()
+	
+	entry := LogEntry{
+		Timestamp: time.Now(),
+		Level:     level,
+		Message:   message,
+		Source:    source,
+	}
+	
+	v.logs = append(v.logs, entry)
+	if len(v.logs) > v.maxLogs {
+		v.logs = v.logs[len(v.logs)-v.maxLogs:]
+	}
+	// Don't set needsUpdate=true to avoid triggering UI refresh
 }
 
 func (v *LogsView) refreshLogDisplay() {
@@ -533,4 +688,20 @@ func truncateString(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+func formatUptimeShort(d time.Duration) string {
+	if d < time.Minute {
+		return fmt.Sprintf("%.0fs", d.Seconds())
+	} else if d < time.Hour {
+		return fmt.Sprintf("%.0fm%.0fs", d.Minutes(), math.Mod(d.Seconds(), 60))
+	} else if d < 24*time.Hour {
+		hours := int(d.Hours())
+		minutes := int(d.Minutes()) % 60
+		return fmt.Sprintf("%dh%dm", hours, minutes)
+	} else {
+		days := int(d.Hours() / 24)
+		hours := int(d.Hours()) % 24
+		return fmt.Sprintf("%dd%dh", days, hours)
+	}
 }

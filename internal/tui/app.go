@@ -19,6 +19,7 @@ type TUIApp struct {
 	cfg                  *config.Config
 	endpointManager      *endpoint.Manager
 	monitoringMiddleware *middleware.MonitoringMiddleware
+	startTime            time.Time
 	
 	// UI components
 	pages     *tview.Pages
@@ -47,7 +48,7 @@ type Tab struct {
 }
 
 // NewTUIApp creates a new TUI application
-func NewTUIApp(cfg *config.Config, endpointManager *endpoint.Manager, monitoringMiddleware *middleware.MonitoringMiddleware) *TUIApp {
+func NewTUIApp(cfg *config.Config, endpointManager *endpoint.Manager, monitoringMiddleware *middleware.MonitoringMiddleware, startTime time.Time) *TUIApp {
 	app := tview.NewApplication()
 	ctx, cancel := context.WithCancel(context.Background())
 	
@@ -56,6 +57,7 @@ func NewTUIApp(cfg *config.Config, endpointManager *endpoint.Manager, monitoring
 		cfg:                  cfg,
 		endpointManager:      endpointManager,
 		monitoringMiddleware: monitoringMiddleware,
+		startTime:            startTime,
 		ctx:                  ctx,
 		cancel:               cancel,
 		currentTab:           0,
@@ -74,7 +76,7 @@ func (t *TUIApp) setupUI() {
 	t.pages = tview.NewPages()
 
 	// Create views
-	t.overviewView = NewOverviewView(t.monitoringMiddleware, t.endpointManager)
+	t.overviewView = NewOverviewView(t.monitoringMiddleware, t.endpointManager, t.startTime)
 	t.endpointsView = NewEndpointsView(t.monitoringMiddleware, t.endpointManager)
 	t.connectionsView = NewConnectionsView(t.monitoringMiddleware, t.cfg)
 	t.logsView = NewLogsView()
@@ -183,8 +185,11 @@ func (t *TUIApp) handleInput(event *tcell.EventKey) *tcell.EventKey {
 func (t *TUIApp) switchToTab(tabIndex int) {
 	if tabIndex >= 0 && tabIndex < len(t.tabs) {
 		t.pages.SwitchToPage(t.tabs[tabIndex].Name)
-		// Note: View updates are handled by the background refresh loop
-		// to avoid conflicts with input handling
+		
+		// Force update logs view when switching to it to show any missed logs
+		if tabIndex == 3 && t.logsView != nil {
+			t.logsView.ForceUpdate()
+		}
 	}
 }
 
@@ -315,6 +320,7 @@ func (t *TUIApp) refreshLoop() {
 							t.connectionsView.Update()
 						}
 					case 3:
+						// Only update logs view when it's the active tab
 						if t.logsView != nil {
 							t.logsView.Update()
 						}
@@ -332,7 +338,13 @@ func (t *TUIApp) refreshLoop() {
 // AddLog adds a log entry to the logs view (thread-safe)
 func (t *TUIApp) AddLog(level, message, source string) {
 	if t.logsView != nil {
-		t.logsView.AddLog(level, message, source)
+		// Only add log if logs tab is currently active to avoid unnecessary UI updates
+		if t.currentTab == 3 {
+			t.logsView.AddLog(level, message, source)
+		} else {
+			// Still add log to buffer but don't trigger UI update
+			t.logsView.AddLogSilent(level, message, source)
+		}
 	}
 }
 

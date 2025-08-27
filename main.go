@@ -29,6 +29,9 @@ var (
 	version = "dev"
 	commit  = "unknown"
 	date    = "unknown"
+	
+	// Runtime variables
+	startTime = time.Now()
 )
 
 func main() {
@@ -138,6 +141,9 @@ func main() {
 		newLogger := setupLogger(newCfg.Logging, tuiApp)
 		slog.SetDefault(newLogger)
 		
+		// Update config watcher's logger too
+		configWatcher.UpdateLogger(newLogger)
+		
 		// Update endpoint manager
 		endpointManager.UpdateConfig(newCfg)
 		
@@ -220,11 +226,14 @@ func main() {
 
 	// Start TUI if enabled
 	if tuiEnabled {
-		tuiApp = tui.NewTUIApp(cfg, endpointManager, monitoringMiddleware)
+		tuiApp = tui.NewTUIApp(cfg, endpointManager, monitoringMiddleware, startTime)
 		
 		// Update logger to send logs to TUI as well
 		logger = setupLogger(cfg.Logging, tuiApp)
 		slog.SetDefault(logger)
+		
+		// Update config watcher's logger to use TUI-enabled logger
+		configWatcher.UpdateLogger(logger)
 		
 		// Run TUI in a goroutine
 		tuiErr := make(chan error, 1)
