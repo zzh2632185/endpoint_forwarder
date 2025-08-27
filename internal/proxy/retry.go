@@ -17,6 +17,9 @@ import (
 type RetryHandler struct {
 	config          *config.Config
 	endpointManager *endpoint.Manager
+	monitoringMiddleware interface{
+		RecordRetry(connID string, endpoint string)
+	}
 }
 
 // NewRetryHandler creates a new retry handler
@@ -31,8 +34,15 @@ func (rh *RetryHandler) SetEndpointManager(manager *endpoint.Manager) {
 	rh.endpointManager = manager
 }
 
+// SetMonitoringMiddleware sets the monitoring middleware
+func (rh *RetryHandler) SetMonitoringMiddleware(mm interface{
+	RecordRetry(connID string, endpoint string)
+}) {
+	rh.monitoringMiddleware = mm
+}
+
 // Operation represents a function that can be retried, returns response and error
-type Operation func(ep *endpoint.Endpoint) (*http.Response, error)
+type Operation func(ep *endpoint.Endpoint, connID string) (*http.Response, error)
 
 // RetryableError represents an error that can be retried with additional context
 type RetryableError struct {
@@ -50,12 +60,12 @@ func (re *RetryableError) Error() string {
 }
 
 // Execute executes an operation with retry and fallback logic
-func (rh *RetryHandler) Execute(operation Operation) (*http.Response, error) {
-	return rh.ExecuteWithContext(context.Background(), operation)
+func (rh *RetryHandler) Execute(operation Operation, connID string) (*http.Response, error) {
+	return rh.ExecuteWithContext(context.Background(), operation, connID)
 }
 
 // ExecuteWithContext executes an operation with context, retry and fallback logic
-func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operation) (*http.Response, error) {
+func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operation, connID string) (*http.Response, error) {
 	// Get healthy endpoints with real-time testing if enabled
 	var endpoints []*endpoint.Endpoint
 	if rh.endpointManager.GetConfig().Strategy.Type == "fastest" && rh.endpointManager.GetConfig().Strategy.FastTestEnabled {
@@ -91,7 +101,7 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 			}
 
 			// Execute operation
-			resp, err := operation(ep)
+			resp, err := operation(ep, connID)
 			if err == nil && resp != nil {
 				// Check if response status code indicates success or should be retried
 				retryDecision := rh.shouldRetryStatusCode(resp.StatusCode)
@@ -131,6 +141,11 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 			// Don't wait after the last attempt on the last endpoint
 			if attempt == rh.config.Retry.MaxAttempts {
 				break
+			}
+
+			// Record retry (we're about to retry)
+			if rh.monitoringMiddleware != nil && connID != "" {
+				rh.monitoringMiddleware.RecordRetry(connID, ep.Config.Name)
 			}
 
 			// Calculate delay with exponential backoff

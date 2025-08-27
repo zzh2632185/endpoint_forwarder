@@ -1,6 +1,7 @@
 package monitor
 
 import (
+	"fmt"
 	"sync"
 	"time"
 )
@@ -163,19 +164,39 @@ func (m *Metrics) RecordResponse(connID string, statusCode int, responseTime tim
 	// Track success/failure
 	if statusCode >= 200 && statusCode < 400 {
 		m.SuccessfulRequests++
-		if m.EndpointStats[endpoint] != nil {
+		// Ensure endpoint stats exist
+		if m.EndpointStats[endpoint] == nil && endpoint != "unknown" {
+			m.EndpointStats[endpoint] = &EndpointMetrics{
+				Name:            endpoint,
+				MinResponseTime: time.Duration(0),
+				MaxResponseTime: time.Duration(0),
+			}
+		}
+		if endpoint != "unknown" && m.EndpointStats[endpoint] != nil {
 			m.EndpointStats[endpoint].SuccessfulRequests++
+			m.EndpointStats[endpoint].TotalRequests++
 		}
 	} else {
 		m.FailedRequests++
-		if m.EndpointStats[endpoint] != nil {
+		// Ensure endpoint stats exist
+		if m.EndpointStats[endpoint] == nil && endpoint != "unknown" {
+			m.EndpointStats[endpoint] = &EndpointMetrics{
+				Name:            endpoint,
+				MinResponseTime: time.Duration(0),
+				MaxResponseTime: time.Duration(0),
+			}
+		}
+		if endpoint != "unknown" && m.EndpointStats[endpoint] != nil {
 			m.EndpointStats[endpoint].FailedRequests++
+			m.EndpointStats[endpoint].TotalRequests++
 		}
 	}
 
 	// Update endpoint metrics
-	if endpointMetrics := m.EndpointStats[endpoint]; endpointMetrics != nil {
+	if endpoint != "unknown" && m.EndpointStats[endpoint] != nil {
+		endpointMetrics := m.EndpointStats[endpoint]
 		endpointMetrics.TotalResponseTime += responseTime
+		endpointMetrics.LastUsed = time.Now()
 		if endpointMetrics.MinResponseTime == 0 || responseTime < endpointMetrics.MinResponseTime {
 			endpointMetrics.MinResponseTime = responseTime
 		}
@@ -219,6 +240,10 @@ func (m *Metrics) RecordRetry(connID string, endpoint string) {
 	if conn, exists := m.ActiveConnections[connID]; exists {
 		conn.RetryCount++
 		conn.LastActivity = time.Now()
+		// Debug log to verify retry recording
+		fmt.Printf("DEBUG: Recorded retry %d for connection %s on endpoint %s\n", conn.RetryCount, connID, endpoint)
+	} else {
+		fmt.Printf("DEBUG: Connection %s not found for retry recording\n", connID)
 	}
 
 	if endpointMetrics := m.EndpointStats[endpoint]; endpointMetrics != nil {
@@ -244,6 +269,17 @@ func (m *Metrics) UpdateEndpointHealth(endpoint, url string, healthy bool, prior
 	m.EndpointStats[endpoint].Healthy = healthy
 	m.EndpointStats[endpoint].URL = url
 	m.EndpointStats[endpoint].Priority = priority
+}
+
+// UpdateConnectionEndpoint updates the endpoint name for an active connection
+func (m *Metrics) UpdateConnectionEndpoint(connID, endpoint string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if conn, exists := m.ActiveConnections[connID]; exists {
+		conn.Endpoint = endpoint
+		conn.LastActivity = time.Now()
+	}
 }
 
 // MarkStreamingConnection marks a connection as streaming

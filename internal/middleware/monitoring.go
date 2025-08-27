@@ -214,3 +214,8 @@ func (mm *MonitoringMiddleware) UpdateEndpointHealthStatus() {
 		)
 	}
 }
+
+// UpdateConnectionEndpoint updates the endpoint name for an active connection
+func (mm *MonitoringMiddleware) UpdateConnectionEndpoint(connID, endpoint string) {
+	mm.metrics.UpdateConnectionEndpoint(connID, endpoint)
+}

@@ -273,12 +273,14 @@ func (c *Config) validate() error {
 
 // ConfigWatcher handles automatic configuration reloading
 type ConfigWatcher struct {
-	configPath string
-	config     *Config
-	mutex      sync.RWMutex
-	watcher    *fsnotify.Watcher
-	logger     *slog.Logger
-	callbacks  []func(*Config)
+	configPath    string
+	config        *Config
+	mutex         sync.RWMutex
+	watcher       *fsnotify.Watcher
+	logger        *slog.Logger
+	callbacks     []func(*Config)
+	lastModTime   time.Time
+	debounceTimer *time.Timer
 }
 
 // NewConfigWatcher creates a new configuration watcher
@@ -289,6 +291,12 @@ func NewConfigWatcher(configPath string, logger *slog.Logger) (*ConfigWatcher, e
 		return nil, fmt.Errorf("failed to load initial config: %w", err)
 	}
 
+	// Get initial modification time
+	fileInfo, err := os.Stat(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get file info: %w", err)
+	}
+
 	// Create file watcher
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -296,11 +304,12 @@ func NewConfigWatcher(configPath string, logger *slog.Logger) (*ConfigWatcher, e
 	}
 
 	cw := &ConfigWatcher{
-		configPath: configPath,
-		config:     config,
-		watcher:    watcher,
-		logger:     logger,
-		callbacks:  make([]func(*Config), 0),
+		configPath:  configPath,
+		config:      config,
+		watcher:     watcher,
+		logger:      logger,
+		callbacks:   make([]func(*Config), 0),
+		lastModTime: fileInfo.ModTime(),
 	}
 
 	// Add config file to watcher
@@ -340,12 +349,34 @@ func (cw *ConfigWatcher) watchLoop() {
 
 			// Handle file write events
 			if event.Has(fsnotify.Write) {
-				cw.logger.Info("🔄 检测到配置文件变更，正在重新加载...", "file", event.Name)
-				if err := cw.reloadConfig(); err != nil {
-					cw.logger.Error("❌ 配置文件重新加载失败", "error", err)
-				} else {
-					cw.logger.Info("✅ 配置文件重新加载成功")
+				// Check if file was actually modified by comparing modification time
+				fileInfo, err := os.Stat(cw.configPath)
+				if err != nil {
+					cw.logger.Warn("⚠️ 无法获取配置文件信息", "error", err)
+					continue
 				}
+
+				// Skip if modification time hasn't changed
+				if !fileInfo.ModTime().After(cw.lastModTime) {
+					continue
+				}
+
+				cw.lastModTime = fileInfo.ModTime()
+				
+				// Cancel any existing debounce timer
+				if cw.debounceTimer != nil {
+					cw.debounceTimer.Stop()
+				}
+
+				// Set up debounce timer to avoid multiple rapid reloads
+				cw.debounceTimer = time.AfterFunc(500*time.Millisecond, func() {
+					cw.logger.Info("🔄 检测到配置文件变更，正在重新加载...", "file", event.Name)
+					if err := cw.reloadConfig(); err != nil {
+						cw.logger.Error("❌ 配置文件重新加载失败", "error", err)
+					} else {
+						cw.logger.Info("✅ 配置文件重新加载成功")
+					}
+				})
 			}
 
 			// Handle file rename/remove events (some editors rename files during save)
@@ -421,5 +452,9 @@ func (cw *ConfigWatcher) logConfigChanges(oldConfig, newConfig *Config) {
 
 // Close stops the configuration watcher
 func (cw *ConfigWatcher) Close() error {
+	// Cancel any pending debounce timer
+	if cw.debounceTimer != nil {
+		cw.debounceTimer.Stop()
+	}
 	return cw.watcher.Close()
 }

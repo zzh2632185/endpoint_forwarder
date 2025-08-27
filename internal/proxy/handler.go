@@ -39,6 +39,13 @@ func NewHandler(endpointManager *endpoint.Manager, cfg *config.Config) *Handler 
 	}
 }
 
+// SetMonitoringMiddleware sets the monitoring middleware for retry tracking
+func (h *Handler) SetMonitoringMiddleware(mm interface{
+	RecordRetry(connID string, endpoint string)
+}) {
+	h.retryHandler.SetMonitoringMiddleware(mm)
+}
+
 // ServeHTTP implements the http.Handler interface
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Create a context for this request
@@ -74,9 +81,22 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) handleRegularRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
 	var selectedEndpointName string
 	
-	operation := func(ep *endpoint.Endpoint) (*http.Response, error) {
+	// Get connection ID from request context (set by logging middleware)
+	connID := ""
+	if connIDValue, ok := r.Context().Value("conn_id").(string); ok {
+		connID = connIDValue
+	}
+	
+	operation := func(ep *endpoint.Endpoint, connectionID string) (*http.Response, error) {
 		// Store the selected endpoint name for logging
 		selectedEndpointName = ep.Config.Name
+		
+		// Update connection endpoint in monitoring (if we have a monitoring middleware)
+		if mm, ok := h.retryHandler.monitoringMiddleware.(interface{
+			UpdateConnectionEndpoint(connID, endpoint string)
+		}); ok && connectionID != "" {
+			mm.UpdateConnectionEndpoint(connectionID, ep.Config.Name)
+		}
 		
 		// Create request to target endpoint
 		targetURL := ep.Config.URL + r.URL.Path
@@ -114,7 +134,7 @@ func (h *Handler) handleRegularRequest(ctx context.Context, w http.ResponseWrite
 	}
 
 	// Execute with retry logic
-	finalResp, lastErr := h.retryHandler.ExecuteWithContext(ctx, operation)
+	finalResp, lastErr := h.retryHandler.ExecuteWithContext(ctx, operation, connID)
 	
 	// Store selected endpoint info in request context for logging
 	if selectedEndpointName != "" {

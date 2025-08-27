@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -56,11 +57,14 @@ func (lm *LoggingMiddleware) Wrap(next http.Handler) http.Handler {
 		clientIP := getClientIP(r)
 		userAgent := truncateString(r.UserAgent(), 50)
 		
-		// Record request start in metrics
+		// Record request start in metrics - we'll update the endpoint later
 		var connID string
 		if lm.monitoringMiddleware != nil {
 			connID = lm.monitoringMiddleware.RecordRequest("unknown", clientIP, userAgent, r.Method, r.URL.Path)
 		}
+		
+		// Store connection ID in request context for use by proxy handler
+		r = r.WithContext(context.WithValue(r.Context(), "conn_id", connID))
 		
 		// Wrap response writer
 		rw := &responseWriter{

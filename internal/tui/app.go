@@ -76,7 +76,7 @@ func (t *TUIApp) setupUI() {
 	// Create views
 	t.overviewView = NewOverviewView(t.monitoringMiddleware, t.endpointManager)
 	t.endpointsView = NewEndpointsView(t.monitoringMiddleware, t.endpointManager)
-	t.connectionsView = NewConnectionsView(t.monitoringMiddleware)
+	t.connectionsView = NewConnectionsView(t.monitoringMiddleware, t.cfg)
 	t.logsView = NewLogsView()
 	t.configView = NewConfigView(t.cfg)
 
@@ -129,14 +129,14 @@ func (t *TUIApp) createHeaderFlex() *tview.Flex {
 	title := tview.NewTextView().
 		SetDynamicColors(true).
 		SetTextAlign(tview.AlignCenter).
-		SetText(fmt.Sprintf("[blue::b]🚀 Claude Request Forwarder TUI[white::-]"))
+		SetText(fmt.Sprintf("[blue::b]🚀 Claude EndPoints Forwarder TUI[white::-]"))
 
 	headerFlex := tview.NewFlex().
 		AddItem(tview.NewTextView(), 1, 1, false).
 		AddItem(title, 0, 1, false).
 		AddItem(tview.NewTextView(), 1, 1, false)
 	
-	headerFlex.SetBorder(true).SetTitle(" Claude Request Forwarder TUI ").SetTitleAlign(tview.AlignCenter)
+	headerFlex.SetBorder(true).SetTitle(" Claude EndPoints Forwarder TUI ").SetTitleAlign(tview.AlignCenter)
 	
 	return headerFlex
 }
@@ -285,7 +285,6 @@ func (t *TUIApp) refreshLoop() {
 			t.app.QueueUpdateDraw(func() {
 				defer func() { 
 					updating = false 
-					// Force a redraw to ensure UI consistency
 					t.app.Sync()
 				}()
 				
@@ -328,6 +327,18 @@ func (t *TUIApp) refreshLoop() {
 			})
 		}
 	}
+}
+
+// AddLog adds a log entry to the logs view (thread-safe)
+func (t *TUIApp) AddLog(level, message, source string) {
+	if t.logsView != nil {
+		t.logsView.AddLog(level, message, source)
+	}
+}
+
+// GetLogsView returns the logs view instance
+func (t *TUIApp) GetLogsView() *LogsView {
+	return t.logsView
 }
 
 // Stop gracefully stops the TUI application

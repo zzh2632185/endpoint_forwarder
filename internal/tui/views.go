@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,7 @@ import (
 	"endpoint_forwarder/config"
 	"endpoint_forwarder/internal/endpoint"
 	"endpoint_forwarder/internal/middleware"
+	"endpoint_forwarder/internal/monitor"
 )
 
 // OverviewView represents the overview tab
@@ -250,11 +252,13 @@ type ConnectionsView struct {
 	container           *tview.Flex
 	statsBox            *tview.TextView
 	monitoringMiddleware *middleware.MonitoringMiddleware
+	config              *config.Config
 }
 
-func NewConnectionsView(monitoringMiddleware *middleware.MonitoringMiddleware) *ConnectionsView {
+func NewConnectionsView(monitoringMiddleware *middleware.MonitoringMiddleware, cfg *config.Config) *ConnectionsView {
 	view := &ConnectionsView{
 		monitoringMiddleware: monitoringMiddleware,
+		config:              cfg,
 	}
 	view.setupUI()
 	return view
@@ -281,17 +285,43 @@ func (v *ConnectionsView) Update() {
 	
 	stats.WriteString("[blue::b]🔗 Active Connections[white::-]\n")
 	
+	// Convert map to slice for stable sorting
+	connections := make([]*monitor.ConnectionInfo, 0, len(metrics.ActiveConnections))
+	for _, conn := range metrics.ActiveConnections {
+		connections = append(connections, conn)
+	}
+	
+	// Sort connections by start time (newest first) for stable ordering
+	sort.Slice(connections, func(i, j int) bool {
+		return connections[i].StartTime.After(connections[j].StartTime)
+	})
+	
 	// Always show exactly 15 lines to maintain consistent height
 	connCount := 0
-	for _, conn := range metrics.ActiveConnections {
+	for _, conn := range connections {
 		if connCount >= 15 {
 			break
 		}
 		duration := time.Since(conn.StartTime)
-		stats.WriteString(fmt.Sprintf("  [cyan]%-15s[white] %-6s %-25s [gray](%8s)[white]\n",
+		
+		// Display endpoint name and retry count
+		endpointDisplay := conn.Endpoint
+		if endpointDisplay == "" || endpointDisplay == "unknown" {
+			endpointDisplay = "main"
+		}
+		
+		retryDisplay := ""
+		if conn.RetryCount >= 0 {
+			maxAttempts := v.config.Retry.MaxAttempts
+			retryDisplay = fmt.Sprintf(" (%d/%d retry)", conn.RetryCount, maxAttempts)
+		}
+		
+		stats.WriteString(fmt.Sprintf("  [cyan]%-15s[white] %-6s %-20s -> [yellow]%s[white]%s [gray](%8s)[white]\n",
 			truncateString(conn.ClientIP, 15),
 			conn.Method,
-			truncateString(conn.Path, 25),
+			truncateString(conn.Path, 20),
+			truncateString(endpointDisplay, 8),
+			retryDisplay,
 			formatDurationShort(duration)))
 		connCount++
 	}
@@ -325,6 +355,7 @@ type LogsView struct {
 	mutex           sync.RWMutex
 	maxLogs         int
 	lastDisplayHash string // Track content changes to avoid unnecessary updates
+	needsUpdate     bool   // Flag to indicate if logs have changed since last display
 }
 
 func NewLogsView() *LogsView {
@@ -333,15 +364,12 @@ func NewLogsView() *LogsView {
 		maxLogs: 500,
 	}
 	view.setupUI()
-	view.startLogSimulation()
 	return view
 }
 
 func (v *LogsView) setupUI() {
-	v.logText = tview.NewTextView().SetDynamicColors(true).SetScrollable(true).SetChangedFunc(func() {
-		v.logText.ScrollToEnd()
-	})
-	v.logText.SetBorder(true).SetTitle(" 📜 System Logs ").SetTitleAlign(tview.AlignLeft)
+	v.logText = tview.NewTextView().SetDynamicColors(false).SetScrollable(true).SetWrap(false)
+	v.logText.SetBorder(true).SetTitle(" System Logs ").SetTitleAlign(tview.AlignLeft)
 	
 	v.container = tview.NewFlex().AddItem(v.logText, 0, 1, true)
 }
@@ -369,11 +397,23 @@ func (v *LogsView) AddLog(level, message, source string) {
 	if len(v.logs) > v.maxLogs {
 		v.logs = v.logs[len(v.logs)-v.maxLogs:]
 	}
+	v.needsUpdate = true
 }
 
 func (v *LogsView) refreshLogDisplay() {
 	v.mutex.RLock()
-	defer v.mutex.RUnlock()
+	needsUpdate := v.needsUpdate
+	v.mutex.RUnlock()
+	
+	// Only update if there are new logs
+	if !needsUpdate {
+		return
+	}
+	
+	v.mutex.Lock()
+	defer v.mutex.Unlock()
+	
+	v.needsUpdate = false
 	
 	// Build display text
 	var displayText strings.Builder
@@ -387,24 +427,21 @@ func (v *LogsView) refreshLogDisplay() {
 		entry := v.logs[i]
 		timeStr := entry.Timestamp.Format("15:04:05")
 		
-		var levelColor, levelIcon string
+		// Simplified log display without emojis and complex formatting
+		var levelStr string
 		switch strings.ToUpper(entry.Level) {
 		case "ERROR":
-			levelColor = "[red]"
-			levelIcon = "❌"
+			levelStr = "[ERR]"
 		case "WARN":
-			levelColor = "[yellow]"
-			levelIcon = "⚠️"
+			levelStr = "[WRN]"
 		case "INFO":
-			levelColor = "[blue]"
-			levelIcon = "ℹ️"
+			levelStr = "[INF]"
 		default:
-			levelColor = "[white]"
-			levelIcon = "📝"
+			levelStr = "[LOG]"
 		}
 		
-		displayText.WriteString(fmt.Sprintf("[gray]%s[white] %s%s[white] [cyan]%s[white]: %s\n",
-			timeStr, levelColor, levelIcon, entry.Source, entry.Message))
+		displayText.WriteString(fmt.Sprintf("%s %s %s: %s\n",
+			timeStr, levelStr, entry.Source, entry.Message))
 	}
 	
 	// Only update if content has changed
@@ -412,34 +449,11 @@ func (v *LogsView) refreshLogDisplay() {
 	if newContent != v.lastDisplayHash {
 		v.lastDisplayHash = newContent
 		v.logText.SetText(newContent)
+		// Scroll to end after setting new text
+		v.logText.ScrollToEnd()
 	}
 }
 
-func (v *LogsView) startLogSimulation() {
-	go func() {
-		ticker := time.NewTicker(4 * time.Second)
-		defer ticker.Stop()
-		
-		sampleLogs := []struct {
-			level   string
-			message string
-			source  string
-		}{
-			{"INFO", "Request processed successfully", "proxy"},
-			{"INFO", "Health check completed", "health"},
-			{"WARN", "High response time detected", "monitor"},
-			{"ERROR", "Connection timeout", "network"},
-			{"INFO", "Configuration reloaded", "config"},
-		}
-		
-		logIndex := 0
-		for range ticker.C {
-			log := sampleLogs[logIndex%len(sampleLogs)]
-			v.AddLog(log.level, log.message, log.source)
-			logIndex++
-		}
-	}()
-}
 
 // ConfigView represents the config tab
 type ConfigView struct {

@@ -47,7 +47,7 @@ func main() {
 	tuiEnabled := *enableTUI && !*disableTUI
 
 	// Setup initial logger (will be updated when config is loaded)
-	logger := setupLogger(config.LoggingConfig{Level: "info", Format: "text"})
+	logger := setupLogger(config.LoggingConfig{Level: "info", Format: "text"}, nil)
 	slog.SetDefault(logger)
 
 	// Create configuration watcher
@@ -76,8 +76,8 @@ func main() {
 		tuiEnabled = !cfg.TUI.Enabled || tuiEnabled // Enable if not explicitly disabled in config
 	}
 
-	// Update logger with config settings
-	logger = setupLogger(cfg.Logging)
+	// Update logger with config settings (TUI will be added later)
+	logger = setupLogger(cfg.Logging, nil)
 	slog.SetDefault(logger)
 
 	if tuiEnabled {
@@ -127,11 +127,15 @@ func main() {
 	
 	// Connect logging and monitoring middlewares
 	loggingMiddleware.SetMonitoringMiddleware(monitoringMiddleware)
+	proxyHandler.SetMonitoringMiddleware(monitoringMiddleware)
+
+	// Store tuiApp reference for configuration reloads
+	var tuiApp *tui.TUIApp
 
 	// Setup configuration reload callback to update components
 	configWatcher.AddReloadCallback(func(newCfg *config.Config) {
-		// Update logger
-		newLogger := setupLogger(newCfg.Logging)
+		// Update logger (pass current tuiApp)
+		newLogger := setupLogger(newCfg.Logging, tuiApp)
 		slog.SetDefault(newLogger)
 		
 		// Update endpoint manager
@@ -215,9 +219,12 @@ func main() {
 	}
 
 	// Start TUI if enabled
-	var tuiApp *tui.TUIApp
 	if tuiEnabled {
 		tuiApp = tui.NewTUIApp(cfg, endpointManager, monitoringMiddleware)
+		
+		// Update logger to send logs to TUI as well
+		logger = setupLogger(cfg.Logging, tuiApp)
+		slog.SetDefault(logger)
 		
 		// Run TUI in a goroutine
 		tuiErr := make(chan error, 1)
@@ -273,7 +280,7 @@ func main() {
 }
 
 // setupLogger configures the structured logger
-func setupLogger(cfg config.LoggingConfig) *slog.Logger {
+func setupLogger(cfg config.LoggingConfig, tuiApp *tui.TUIApp) *slog.Logger {
 	var level slog.Level
 	switch cfg.Level {
 	case "debug":
@@ -290,7 +297,7 @@ func setupLogger(cfg config.LoggingConfig) *slog.Logger {
 
 	var handler slog.Handler
 	// Create a custom handler that only outputs the message
-	handler = &SimpleHandler{level: level}
+	handler = &SimpleHandler{level: level, tuiApp: tuiApp}
 
 	return slog.New(handler)
 }
@@ -298,6 +305,7 @@ func setupLogger(cfg config.LoggingConfig) *slog.Logger {
 // SimpleHandler only outputs the log message without any metadata
 type SimpleHandler struct {
 	level slog.Level
+	tuiApp *tui.TUIApp
 }
 
 func (h *SimpleHandler) Enabled(_ context.Context, level slog.Level) bool {
@@ -305,8 +313,25 @@ func (h *SimpleHandler) Enabled(_ context.Context, level slog.Level) bool {
 }
 
 func (h *SimpleHandler) Handle(_ context.Context, r slog.Record) error {
-	// Only output the message
-	fmt.Println(r.Message)
+	message := r.Message
+	
+	// Send to TUI if available
+	if h.tuiApp != nil {
+		level := "INFO"
+		switch r.Level {
+		case slog.LevelDebug:
+			level = "DEBUG"
+		case slog.LevelWarn:
+			level = "WARN"
+		case slog.LevelError:
+			level = "ERROR"
+		}
+		h.tuiApp.AddLog(level, message, "system")
+	} else {
+		// Only output to console when TUI is not available
+		fmt.Println(message)
+	}
+	
 	return nil
 }
 

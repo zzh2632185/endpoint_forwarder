@@ -46,7 +46,7 @@ auth:
   enabled: false             # 是否启用鉴权，默认: false (不鉴权)
   # token: "your-bearer-token"  # Bearer Token，启用鉴权时必须设置
 
-# TUI界面配置
+# TUI界面配置,如果部署在服务器上建议设置为 false
 tui:
   enabled: true               # 是否启用TUI界面，默认: true
   update_interval: "1s"       # TUI刷新间隔，默认: 1s
