@@ -498,7 +498,7 @@ func NewLogsView() *LogsView {
 }
 
 func (v *LogsView) setupUI() {
-	v.logText = tview.NewTextView().SetDynamicColors(false).SetScrollable(true).SetWrap(false)
+	v.logText = tview.NewTextView().SetDynamicColors(false).SetScrollable(true).SetWrap(true)
 	v.logText.SetBorder(true).SetTitle(" System Logs ").SetTitleAlign(tview.AlignLeft)
 	
 	v.container = tview.NewFlex().AddItem(v.logText, 0, 1, true)

@@ -162,9 +162,6 @@ func (t *TUIApp) handleInput(event *tcell.EventKey) *tcell.EventKey {
 		// Quit application
 		t.Stop()
 		return nil
-	case tcell.KeyF1:
-		t.showHelp()
-		return nil
 	}
 
 	// Handle number keys for direct tab access
@@ -203,7 +200,7 @@ func (t *TUIApp) updateTabBar() {
 			tabText += fmt.Sprintf(` [gray]%d: %s[white] `, i+1, tab.Name)
 		}
 	}
-	tabText += `   [gray]Tab/Shift+Tab: Navigate  F1: Help  Ctrl+C: Quit[white]`
+	tabText += `   [gray]Tab/Shift+Tab: Navigate  Ctrl+C: Quit[white]`
 	t.tabBar.SetText(tabText)
 }
 
@@ -218,43 +215,6 @@ func (t *TUIApp) updateStatusBar() {
 		len(metrics.ActiveConnections),
 	)
 	t.statusBar.SetText(statusText)
-}
-
-// showHelp displays help information
-func (t *TUIApp) showHelp() {
-	helpText := `[blue::b]Claude Request Forwarder TUI - Help[white::-]
-
-[yellow::b]Navigation:[white::-]
-• Tab / Shift+Tab: Navigate between tabs
-• 1-5: Jump directly to tab (1=Overview, 2=Endpoints, etc.)
-• Arrow Keys: Navigate within views
-• Enter: Select/Activate items
-• F1: Show this help
-• Ctrl+C: Quit application
-
-[yellow::b]Tabs:[white::-]
-• [green]Overview[white]: Real-time metrics and system status
-• [green]Endpoints[white]: Endpoint health and performance details  
-• [green]Connections[white]: Active connections and traffic info
-• [green]Logs[white]: Real-time application logs
-• [green]Config[white]: Current configuration display
-
-[yellow::b]Features:[white::-]
-• Real-time monitoring with 1-second refresh rate
-• Color-coded status indicators (Green=Good, Yellow=Warning, Red=Error)
-• Historical trending data and performance metrics
-• Connection tracking and traffic analysis
-
-Press any key to close this help.`
-
-	modal := tview.NewModal().
-		SetText(helpText).
-		AddButtons([]string{"Close"}).
-		SetDoneFunc(func(buttonIndex int, buttonLabel string) {
-			t.app.SetRoot(t.app.GetFocus(), true)
-		})
-	
-	t.app.SetRoot(modal, false).SetFocus(modal)
 }
 
 // Run starts the TUI application
