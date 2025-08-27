@@ -68,7 +68,7 @@ proxy:
 endpoints:
   # 主要端点 - 其他端点会继承此端点的 token 和 headers (如果未指定)
   - name: "primary"
-    url: "https://api.openai.com/v1/chat/completions"
+    url: "https://api.openai.com"
     priority: 1              # 优先级 (数字越小优先级越高)
     timeout: "300s"           # 请求超时时间，如果不设置则使用 global_timeout
     token: "sk-your-openai-api-key"  # API 密钥
@@ -78,14 +78,14 @@ endpoints:
 
   # 备用端点 1 - 会继承主要端点的 token 和 headers
   - name: "backup1"
-    url: "https://api.anthropic.com/v1/messages"
+    url: "https://api.anthropic.com"
     priority: 2
     timeout: "300s"
     # token 和 headers 会从第一个端点继承
 
   # 备用端点 2 - 使用不同的 token 和 headers
   - name: "backup2"
-    url: "https://api.example.com/v1/chat"
+    url: "https://api.example.com"
     priority: 3
     timeout: "300s"
     token: "sk-different-api-key"  # 覆盖继承的 token
@@ -96,7 +96,7 @@ endpoints:
 
   # 本地端点示例
   - name: "local"
-    url: "http://localhost:11434/v1/chat/completions"
+    url: "http://localhost:11434"
     priority: 4
     timeout: "300s"
     # 本地服务通常不需要 token
