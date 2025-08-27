@@ -51,11 +51,6 @@ func NewManager(cfg *config.Config) *Manager {
 		httpTransport = &http.Transport{}
 	}
 	
-	// Log proxy configuration
-	if cfg.Proxy.Enabled {
-		proxyInfo := transport.GetProxyInfo(cfg)
-		slog.Info("🌐 Proxy configuration enabled", "proxy", proxyInfo)
-	}
 	
 	manager := &Manager{
 		config: cfg,

@@ -15,6 +15,7 @@ import (
 	"endpoint_forwarder/internal/endpoint"
 	"endpoint_forwarder/internal/middleware"
 	"endpoint_forwarder/internal/proxy"
+	"endpoint_forwarder/internal/transport"
 )
 
 var (
@@ -65,6 +66,14 @@ func main() {
 		"config_file", *configPath,
 		"endpoints_count", len(cfg.Endpoints),
 		"strategy", cfg.Strategy.Type)
+
+	// Display proxy configuration
+	if cfg.Proxy.Enabled {
+		proxyInfo := transport.GetProxyInfo(cfg)
+		logger.Info("🔗 " + proxyInfo)
+	} else {
+		logger.Info("🔗 代理未启用，将直接连接目标端点")
+	}
 
 	// Display security information during startup
 	if cfg.Auth.Enabled {

@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"net/http"
@@ -119,8 +120,10 @@ func createSOCKS5ProxyTransport(cfg *config.Config, transport *http.Transport) (
 		return nil, fmt.Errorf("failed to create SOCKS5 dialer: %w", err)
 	}
 
-	// Set the custom dialer
-	transport.Dial = dialer.Dial
+	// Set the custom dialer using DialContext
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		return dialer.Dial(network, addr)
+	}
 	return transport, nil
 }
 
