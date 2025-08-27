@@ -227,7 +227,7 @@ func (h *Handler) parseSSETokens(ctx context.Context, responseBody, endpointName
 	tokenParser := NewTokenParser()
 	lines := strings.Split(responseBody, "\n")
 	
-	for i, line := range lines {
+	for _, line := range lines {
 		if tokenUsage := tokenParser.ParseSSELine(line); tokenUsage != nil {
 			// Record token usage
 			if mm, ok := h.retryHandler.monitoringMiddleware.(interface{

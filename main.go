@@ -73,10 +73,8 @@ func main() {
 	if *disableTUI {
 		tuiEnabled = false
 	} else if cfg != nil {
-		// If not explicitly disabled by command line, use config file or default (true)
-		// In YAML, if tui.enabled is not specified, it defaults to false in struct
-		// but we want TUI enabled by default, so we check if it's explicitly set to false
-		tuiEnabled = !cfg.TUI.Enabled || tuiEnabled // Enable if not explicitly disabled in config
+		// Use config file setting
+		tuiEnabled = cfg.TUI.Enabled
 	}
 
 	// Update logger with config settings (TUI will be added later)
