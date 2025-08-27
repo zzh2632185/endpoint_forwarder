@@ -219,3 +219,13 @@ func (mm *MonitoringMiddleware) UpdateEndpointHealthStatus() {
 func (mm *MonitoringMiddleware) UpdateConnectionEndpoint(connID, endpoint string) {
 	mm.metrics.UpdateConnectionEndpoint(connID, endpoint)
 }
+
+// RecordTokenUsage records token usage for a specific request
+func (mm *MonitoringMiddleware) RecordTokenUsage(connID string, endpoint string, tokens *monitor.TokenUsage) {
+	mm.metrics.RecordTokenUsage(connID, endpoint, tokens)
+}
+
+// MarkStreamingConnection marks a connection as streaming
+func (mm *MonitoringMiddleware) MarkStreamingConnection(connID string) {
+	mm.metrics.MarkStreamingConnection(connID)
+}

@@ -6,6 +6,14 @@ import (
 	"time"
 )
 
+// TokenUsage represents token usage statistics
+type TokenUsage struct {
+	InputTokens            int64
+	OutputTokens           int64
+	CacheCreationTokens    int64
+	CacheReadTokens        int64
+}
+
 // Metrics contains all monitoring metrics
 type Metrics struct {
 	mu sync.RWMutex
@@ -14,6 +22,9 @@ type Metrics struct {
 	TotalRequests     int64
 	SuccessfulRequests int64
 	FailedRequests    int64
+	
+	// Token usage metrics
+	TotalTokenUsage   TokenUsage
 	
 	// Response time metrics
 	ResponseTimes     []time.Duration
@@ -51,6 +62,7 @@ type EndpointMetrics struct {
 	RetryCount       int64
 	Priority         int
 	Healthy          bool
+	TokenUsage       TokenUsage
 }
 
 // ConnectionInfo represents an active connection
@@ -303,6 +315,7 @@ func (m *Metrics) GetMetrics() *Metrics {
 		TotalRequests:      m.TotalRequests,
 		SuccessfulRequests: m.SuccessfulRequests,
 		FailedRequests:     m.FailedRequests,
+		TotalTokenUsage:    m.TotalTokenUsage,
 		TotalResponseTime:  m.TotalResponseTime,
 		MinResponseTime:    m.MinResponseTime,
 		MaxResponseTime:    m.MaxResponseTime,
@@ -326,6 +339,7 @@ func (m *Metrics) GetMetrics() *Metrics {
 			RetryCount:         v.RetryCount,
 			Priority:           v.Priority,
 			Healthy:            v.Healthy,
+			TokenUsage:         v.TokenUsage,
 		}
 	}
 
@@ -402,6 +416,40 @@ func (m *Metrics) GetP95ResponseTime() time.Duration {
 	// For a proper implementation, we'd sort the slice
 	// For now, return max as approximation
 	return m.MaxResponseTime
+}
+
+// RecordTokenUsage records token usage for a specific request
+func (m *Metrics) RecordTokenUsage(connID string, endpoint string, tokens *TokenUsage) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Update overall token metrics
+	m.TotalTokenUsage.InputTokens += tokens.InputTokens
+	m.TotalTokenUsage.OutputTokens += tokens.OutputTokens
+	m.TotalTokenUsage.CacheCreationTokens += tokens.CacheCreationTokens
+	m.TotalTokenUsage.CacheReadTokens += tokens.CacheReadTokens
+
+	// Update endpoint-specific token metrics
+	if endpoint != "unknown" && m.EndpointStats[endpoint] != nil {
+		m.EndpointStats[endpoint].TokenUsage.InputTokens += tokens.InputTokens
+		m.EndpointStats[endpoint].TokenUsage.OutputTokens += tokens.OutputTokens
+		m.EndpointStats[endpoint].TokenUsage.CacheCreationTokens += tokens.CacheCreationTokens
+		m.EndpointStats[endpoint].TokenUsage.CacheReadTokens += tokens.CacheReadTokens
+	}
+
+	// Update connection info if available
+	if conn, exists := m.ActiveConnections[connID]; exists {
+		// We could add token info to connection if needed
+		conn.LastActivity = time.Now()
+	}
+}
+
+// GetTotalTokenStats returns total token usage statistics
+func (m *Metrics) GetTotalTokenStats() TokenUsage {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return m.TotalTokenUsage
 }
 
 // generateConnectionID generates a unique connection ID
