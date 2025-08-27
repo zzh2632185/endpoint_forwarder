@@ -20,6 +20,7 @@ type Config struct {
 	Streaming    StreamingConfig  `yaml:"streaming"`
 	Proxy        ProxyConfig      `yaml:"proxy"`
 	Auth         AuthConfig       `yaml:"auth"`
+	TUI          TUIConfig        `yaml:"tui"`           // TUI configuration
 	GlobalTimeout time.Duration   `yaml:"global_timeout"` // Global timeout for non-streaming requests
 	Endpoints    []EndpointConfig `yaml:"endpoints"`
 }
@@ -74,6 +75,11 @@ type ProxyConfig struct {
 type AuthConfig struct {
 	Enabled bool   `yaml:"enabled"`                   // Enable authentication, default: false
 	Token   string `yaml:"token,omitempty"`           // Bearer token for authentication
+}
+
+type TUIConfig struct {
+	Enabled       bool          `yaml:"enabled"`        // Enable TUI interface, default: true
+	UpdateInterval time.Duration `yaml:"update_interval"` // TUI refresh interval, default: 1s
 }
 
 type EndpointConfig struct {
@@ -170,6 +176,13 @@ func (c *Config) setDefaults() {
 	if c.GlobalTimeout == 0 {
 		c.GlobalTimeout = 300 * time.Second // Default 5 minutes for non-streaming requests
 	}
+
+	// Set TUI defaults
+	if c.TUI.UpdateInterval == 0 {
+		c.TUI.UpdateInterval = 2 * time.Second // Default 2 second refresh (reduced from 1s)
+	}
+	// TUI enabled defaults to true if not explicitly set in YAML
+	// This will be handled by the application logic
 
 	// Set default timeouts for endpoints and handle parameter inheritance
 	var defaultEndpoint *EndpointConfig

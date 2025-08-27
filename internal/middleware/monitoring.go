@@ -4,19 +4,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"time"
 
 	"endpoint_forwarder/internal/endpoint"
+	"endpoint_forwarder/internal/monitor"
 )
 
 // MonitoringMiddleware provides health and metrics endpoints
 type MonitoringMiddleware struct {
 	endpointManager *endpoint.Manager
+	metrics         *monitor.Metrics
 }
 
 // NewMonitoringMiddleware creates a new monitoring middleware
 func NewMonitoringMiddleware(endpointManager *endpoint.Manager) *MonitoringMiddleware {
 	return &MonitoringMiddleware{
 		endpointManager: endpointManager,
+		metrics:         monitor.NewMetrics(),
 	}
 }
 
@@ -176,4 +180,37 @@ func (mm *MonitoringMiddleware) handleMetrics(w http.ResponseWriter, r *http.Req
 	}
 	
 	fmt.Fprintf(w, "endpoint_forwarder_endpoints_healthy %d\n", healthyCount)
+}
+
+// GetMetrics returns the metrics instance for TUI access
+func (mm *MonitoringMiddleware) GetMetrics() *monitor.Metrics {
+	return mm.metrics
+}
+
+// RecordRequest records a new request in metrics
+func (mm *MonitoringMiddleware) RecordRequest(endpoint, clientIP, userAgent, method, path string) string {
+	return mm.metrics.RecordRequest(endpoint, clientIP, userAgent, method, path)
+}
+
+// RecordResponse records a response in metrics
+func (mm *MonitoringMiddleware) RecordResponse(connID string, statusCode int, responseTime time.Duration, bytesSent int64, endpoint string) {
+	mm.metrics.RecordResponse(connID, statusCode, responseTime, bytesSent, endpoint)
+}
+
+// RecordRetry records a retry attempt
+func (mm *MonitoringMiddleware) RecordRetry(connID string, endpoint string) {
+	mm.metrics.RecordRetry(connID, endpoint)
+}
+
+// UpdateEndpointHealthStatus updates endpoint health in metrics
+func (mm *MonitoringMiddleware) UpdateEndpointHealthStatus() {
+	endpoints := mm.endpointManager.GetAllEndpoints()
+	for _, ep := range endpoints {
+		mm.metrics.UpdateEndpointHealth(
+			ep.Config.Name,
+			ep.Config.URL,
+			ep.IsHealthy(),
+			ep.Config.Priority,
+		)
+	}
 }

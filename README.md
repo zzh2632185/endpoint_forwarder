@@ -12,6 +12,7 @@ A high-performance Go application that transparently forwards Claude API request
 - **Retry & Fallback**: Exponential backoff with automatic endpoint fallback
 - **Monitoring**: Built-in health checks and Prometheus-style metrics
 - **Structured Logging**: Configurable JSON or text logging with multiple levels
+- **TUI Interface**: Built-in Terminal User Interface for real-time monitoring (enabled by default)
 
 ## Quick Start
 
@@ -28,7 +29,14 @@ A high-performance Go application that transparently forwards Claude API request
 
 3. **Run the forwarder**:
    ```bash
+   # Default mode with TUI interface
    ./endpoint_forwarder -config config/config.yaml
+   
+   # Run without TUI (traditional console mode)
+   ./endpoint_forwarder -config config/config.yaml --no-tui
+   
+   # Explicitly enable TUI (default behavior)
+   ./endpoint_forwarder -config config/config.yaml --tui
    ```
 
 4. **Send requests to the forwarder**:
@@ -90,6 +98,31 @@ auth:
   enabled: false                    # Enable Bearer token authentication (default: false)
   token: "your-bearer-token"        # Bearer token for authentication (required when enabled)
 ```
+
+### TUI Interface Configuration
+```yaml
+tui:
+  enabled: true                     # Enable TUI interface (default: true)
+  update_interval: "1s"             # TUI refresh interval (default: 1s)
+```
+
+**TUI Features:**
+- **Real-time Monitoring**: Live request metrics, response times, and success rates
+- **Multi-tab Interface**: Overview, Endpoints, Connections, Logs, and Configuration tabs
+- **Interactive Navigation**: Tab/Shift+Tab to switch tabs, 1-5 for direct access
+- **Color-coded Status**: Green=Healthy, Yellow=Warning, Red=Error
+- **ASCII Charts**: Response time trends and performance visualization
+- **Live Connection Tracking**: Monitor active connections and traffic
+- **Real-time Logs**: System logs with filtering and search capabilities
+
+**TUI Controls:**
+- `Tab/Shift+Tab`: Navigate between tabs
+- `1-5`: Jump directly to tab (1=Overview, 2=Endpoints, etc.)
+- `F1`: Show help
+- `Ctrl+C`: Quit application
+- `Arrow Keys`: Navigate within views
+- `P`: Pause/Resume (in Logs view)
+- `C`: Clear logs (in Logs view)
 
 **Usage:**
 - When `enabled: false` (default): No authentication is required, requests pass through directly
@@ -264,11 +297,26 @@ curl http://localhost:8080/metrics
 ## Command Line Options
 
 ```bash
-./endpoint_forwarder -config path/to/config.yaml
+./endpoint_forwarder [OPTIONS]
 ```
 
 Options:
-- `-config`: Path to configuration file (default: "config/example.yaml")
+- `-config path/to/config.yaml`: Path to configuration file (default: "config/example.yaml")
+- `-version`: Show version information
+- `-tui`: Enable TUI interface (default: true)
+- `-no-tui`: Disable TUI interface (run in traditional console mode)
+
+Examples:
+```bash
+# Default mode with TUI
+./endpoint_forwarder -config my-config.yaml
+
+# Run without TUI (traditional console logging)
+./endpoint_forwarder -config my-config.yaml -no-tui
+
+# Show version information
+./endpoint_forwarder -version
+```
 
 ## Logging
 

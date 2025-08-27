@@ -15,12 +15,15 @@ import (
 	"endpoint_forwarder/internal/endpoint"
 	"endpoint_forwarder/internal/middleware"
 	"endpoint_forwarder/internal/proxy"
+	"endpoint_forwarder/internal/tui"
 	"endpoint_forwarder/internal/transport"
 )
 
 var (
 	configPath = flag.String("config", "config/example.yaml", "Path to configuration file")
 	showVersion = flag.Bool("version", false, "Show version information")
+	enableTUI = flag.Bool("tui", true, "Enable TUI interface (default: true)")
+	disableTUI = flag.Bool("no-tui", false, "Disable TUI interface")
 	
 	// Build-time variables (set via ldflags)
 	version = "dev"
@@ -40,6 +43,9 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Determine TUI mode
+	tuiEnabled := *enableTUI && !*disableTUI
+
 	// Setup initial logger (will be updated when config is loaded)
 	logger := setupLogger(config.LoggingConfig{Level: "info", Format: "text"})
 	slog.SetDefault(logger)
@@ -55,34 +61,54 @@ func main() {
 	// Get initial configuration
 	cfg := configWatcher.GetConfig()
 
+	// Apply TUI configuration from config file and command line
+	if cfg.TUI.UpdateInterval == 0 {
+		cfg.TUI.UpdateInterval = 1 * time.Second // Default
+	}
+	
+	// Command line flags override config file
+	if *disableTUI {
+		tuiEnabled = false
+	} else if cfg != nil {
+		// If not explicitly disabled by command line, use config file or default (true)
+		// In YAML, if tui.enabled is not specified, it defaults to false in struct
+		// but we want TUI enabled by default, so we check if it's explicitly set to false
+		tuiEnabled = !cfg.TUI.Enabled || tuiEnabled // Enable if not explicitly disabled in config
+	}
+
 	// Update logger with config settings
 	logger = setupLogger(cfg.Logging)
 	slog.SetDefault(logger)
 
-	logger.Info("🚀 Claude Request Forwarder 启动中...",
-		"version", version,
-		"commit", commit,
-		"build_date", date,
-		"config_file", *configPath,
-		"endpoints_count", len(cfg.Endpoints),
-		"strategy", cfg.Strategy.Type)
-
-	// Display proxy configuration
-	if cfg.Proxy.Enabled {
-		proxyInfo := transport.GetProxyInfo(cfg)
-		logger.Info("🔗 " + proxyInfo)
+	if tuiEnabled {
+		logger.Info("🖥️ TUI模式已启用，启动图形化监控界面")
 	} else {
-		logger.Info("🔗 代理未启用，将直接连接目标端点")
+		logger.Info("🚀 Claude Request Forwarder 启动中... (无TUI模式)",
+			"version", version,
+			"commit", commit,
+			"build_date", date,
+			"config_file", *configPath,
+			"endpoints_count", len(cfg.Endpoints),
+			"strategy", cfg.Strategy.Type)
 	}
 
-	// Display security information during startup
-	if cfg.Auth.Enabled {
-		logger.Info("🔐 鉴权已启用，访问需要Bearer Token验证")
-	} else {
-		logger.Info("🔓 鉴权已禁用，所有请求将直接转发")
-		// Pre-warn about non-localhost binding without auth
-		if cfg.Server.Host != "127.0.0.1" && cfg.Server.Host != "localhost" && cfg.Server.Host != "::1" {
-			logger.Warn("⚠️  注意：将在非本地地址启动但未启用鉴权，请确保网络环境安全")
+	// Display proxy configuration (only in non-TUI mode)
+	if !tuiEnabled {
+		if cfg.Proxy.Enabled {
+			proxyInfo := transport.GetProxyInfo(cfg)
+			logger.Info("🔗 " + proxyInfo)
+		} else {
+			logger.Info("🔗 代理未启用，将直接连接目标端点")
+		}
+
+		// Display security information during startup
+		if cfg.Auth.Enabled {
+			logger.Info("🔐 鉴权已启用，访问需要Bearer Token验证")
+		} else {
+			logger.Info("🔓 鉴权已禁用，所有请求将直接转发")
+			if cfg.Server.Host != "127.0.0.1" && cfg.Server.Host != "localhost" && cfg.Server.Host != "::1" {
+				logger.Warn("⚠️  注意：将在非本地地址启动但未启用鉴权，请确保网络环境安全")
+			}
 		}
 	}
 
@@ -98,6 +124,9 @@ func main() {
 	loggingMiddleware := middleware.NewLoggingMiddleware(logger)
 	monitoringMiddleware := middleware.NewMonitoringMiddleware(endpointManager)
 	authMiddleware := middleware.NewAuthMiddleware(cfg.Auth)
+	
+	// Connect logging and monitoring middlewares
+	loggingMiddleware.SetMonitoringMiddleware(monitoringMiddleware)
 
 	// Setup configuration reload callback to update components
 	configWatcher.AddReloadCallback(func(newCfg *config.Config) {
@@ -114,10 +143,14 @@ func main() {
 		// Update auth middleware
 		authMiddleware.UpdateConfig(newCfg.Auth)
 		
-		newLogger.Info("🔄 所有组件已更新为新配置")
+		if !tuiEnabled {
+			newLogger.Info("🔄 所有组件已更新为新配置")
+		}
 	})
 
-	logger.Info("🔄 配置文件自动重载已启用")
+	if !tuiEnabled {
+		logger.Info("🔄 配置文件自动重载已启用")
+	}
 
 	// Setup HTTP server
 	mux := http.NewServeMux()
@@ -139,9 +172,11 @@ func main() {
 	// Start server in a goroutine
 	serverErr := make(chan error, 1)
 	go func() {
-		logger.Info("🌐 HTTP 服务器启动中...",
-			"address", server.Addr,
-			"endpoints_count", len(cfg.Endpoints))
+		if !tuiEnabled {
+			logger.Info("🌐 HTTP 服务器启动中...",
+				"address", server.Addr,
+				"endpoints_count", len(cfg.Endpoints))
+		}
 
 		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			serverErr <- err
@@ -159,38 +194,70 @@ func main() {
 	default:
 		// Server started successfully
 		baseURL := fmt.Sprintf("http://%s:%d", cfg.Server.Host, cfg.Server.Port)
-		logger.Info("✅ 服务器启动成功！")
-		logger.Info("📋 配置说明：请在 Claude Code 的 settings.json 中设置")
-		logger.Info("🔧 ANTHROPIC_BASE_URL: " + baseURL)
-		logger.Info("📡 服务器地址: " + baseURL)
 		
-		// Security warning for non-localhost addresses
-		if cfg.Server.Host != "127.0.0.1" && cfg.Server.Host != "localhost" && cfg.Server.Host != "::1" {
-			if !cfg.Auth.Enabled {
-				logger.Warn("⚠️  安全警告：服务器绑定到非本地地址但未启用鉴权！")
-				logger.Warn("🔒 强烈建议启用鉴权以保护您的端点访问")
-				logger.Warn("📝 在配置文件中设置 auth.enabled: true 和 auth.token 来启用鉴权")
-			} else {
-				logger.Info("🔒 已启用鉴权保护，服务器可安全对外开放")
+		if !tuiEnabled {
+			logger.Info("✅ 服务器启动成功！")
+			logger.Info("📋 配置说明：请在 Claude Code 的 settings.json 中设置")
+			logger.Info("🔧 ANTHROPIC_BASE_URL: " + baseURL)
+			logger.Info("📡 服务器地址: " + baseURL)
+			
+			// Security warning for non-localhost addresses
+			if cfg.Server.Host != "127.0.0.1" && cfg.Server.Host != "localhost" && cfg.Server.Host != "::1" {
+				if !cfg.Auth.Enabled {
+					logger.Warn("⚠️  安全警告：服务器绑定到非本地地址但未启用鉴权！")
+					logger.Warn("🔒 强烈建议启用鉴权以保护您的端点访问")
+					logger.Warn("📝 在配置文件中设置 auth.enabled: true 和 auth.token 来启用鉴权")
+				} else {
+					logger.Info("🔒 已启用鉴权保护，服务器可安全对外开放")
+				}
 			}
 		}
 	}
 
-	// Wait for interrupt signal
-	interrupt := make(chan os.Signal, 1)
-	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
+	// Start TUI if enabled
+	var tuiApp *tui.TUIApp
+	if tuiEnabled {
+		tuiApp = tui.NewTUIApp(cfg, endpointManager, monitoringMiddleware)
+		
+		// Run TUI in a goroutine
+		tuiErr := make(chan error, 1)
+		go func() {
+			tuiErr <- tuiApp.Run()
+		}()
+		
+		// Wait for TUI to exit or server error
+		select {
+		case err := <-serverErr:
+			logger.Error("❌ 服务器运行时错误", "error", err)
+			if tuiApp != nil {
+				tuiApp.Stop()
+			}
+			os.Exit(1)
+		case err := <-tuiErr:
+			logger.Info("📱 TUI界面已关闭")
+			if err != nil {
+				logger.Error("TUI运行错误", "error", err)
+			}
+		}
+	} else {
+		// Wait for interrupt signal in non-TUI mode
+		interrupt := make(chan os.Signal, 1)
+		signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
 
-	// Block until we receive a signal or server error
-	select {
-	case err := <-serverErr:
-		logger.Error("❌ 服务器运行时错误", "error", err)
-		os.Exit(1)
-	case sig := <-interrupt:
-		logger.Info("📡 收到终止信号，开始优雅关闭...", "signal", sig)
+		// Block until we receive a signal or server error
+		select {
+		case err := <-serverErr:
+			logger.Error("❌ 服务器运行时错误", "error", err)
+			os.Exit(1)
+		case sig := <-interrupt:
+			logger.Info("📡 收到终止信号，开始优雅关闭...", "signal", sig)
+		}
 	}
 
 	// Graceful shutdown
-	logger.Info("🛑 正在关闭服务器...")
+	if !tuiEnabled {
+		logger.Info("🛑 正在关闭服务器...")
+	}
 	
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -200,7 +267,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	logger.Info("✅ 服务器已安全关闭")
+	if !tuiEnabled {
+		logger.Info("✅ 服务器已安全关闭")
+	}
 }
 
 // setupLogger configures the structured logger

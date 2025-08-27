@@ -10,7 +10,8 @@ import (
 
 // LoggingMiddleware provides request/response logging
 type LoggingMiddleware struct {
-	logger *slog.Logger
+	logger            *slog.Logger
+	monitoringMiddleware *MonitoringMiddleware
 }
 
 // NewLoggingMiddleware creates a new logging middleware
@@ -18,6 +19,11 @@ func NewLoggingMiddleware(logger *slog.Logger) *LoggingMiddleware {
 	return &LoggingMiddleware{
 		logger: logger,
 	}
+}
+
+// SetMonitoringMiddleware sets the monitoring middleware reference
+func (lm *LoggingMiddleware) SetMonitoringMiddleware(mm *MonitoringMiddleware) {
+	lm.monitoringMiddleware = mm
 }
 
 // responseWriter wraps http.ResponseWriter to capture status code and bytes written
@@ -47,6 +53,14 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 func (lm *LoggingMiddleware) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		clientIP := getClientIP(r)
+		userAgent := truncateString(r.UserAgent(), 50)
+		
+		// Record request start in metrics
+		var connID string
+		if lm.monitoringMiddleware != nil {
+			connID = lm.monitoringMiddleware.RecordRequest("unknown", clientIP, userAgent, r.Method, r.URL.Path)
+		}
 		
 		// Wrap response writer
 		rw := &responseWriter{
@@ -59,9 +73,10 @@ func (lm *LoggingMiddleware) Wrap(next http.Handler) http.Handler {
 		lm.logger.Info("🚀 Request started",
 			"method", r.Method,
 			"path", r.URL.Path,
-			"client_ip", getClientIP(r),
-			"user_agent", truncateString(r.UserAgent(), 50),
+			"client_ip", clientIP,
+			"user_agent", userAgent,
 			"content_length", r.ContentLength,
+			"conn_id", connID,
 		)
 
 		// Process request
@@ -76,6 +91,11 @@ func (lm *LoggingMiddleware) Wrap(next http.Handler) http.Handler {
 			selectedEndpoint = ep
 		}
 
+		// Record response in metrics
+		if lm.monitoringMiddleware != nil && connID != "" {
+			lm.monitoringMiddleware.RecordResponse(connID, rw.statusCode, duration, rw.bytes, selectedEndpoint)
+		}
+
 		// Log response
 		statusEmoji := getStatusEmoji(rw.statusCode)
 		lm.logger.Info(fmt.Sprintf("%s Request completed", statusEmoji),
@@ -85,7 +105,8 @@ func (lm *LoggingMiddleware) Wrap(next http.Handler) http.Handler {
 			"status_code", rw.statusCode,
 			"bytes_written", formatBytes(rw.bytes),
 			"duration", formatDuration(duration),
-			"client_ip", getClientIP(r),
+			"client_ip", clientIP,
+			"conn_id", connID,
 		)
 
 		// Log slow requests as warnings
@@ -96,6 +117,7 @@ func (lm *LoggingMiddleware) Wrap(next http.Handler) http.Handler {
 				"endpoint", selectedEndpoint,
 				"duration", formatDuration(duration),
 				"status_code", rw.statusCode,
+				"conn_id", connID,
 			)
 		}
 
@@ -114,6 +136,7 @@ func (lm *LoggingMiddleware) Wrap(next http.Handler) http.Handler {
 				"endpoint", selectedEndpoint,
 				"status_code", rw.statusCode,
 				"duration", formatDuration(duration),
+				"conn_id", connID,
 			)
 		}
 	})
