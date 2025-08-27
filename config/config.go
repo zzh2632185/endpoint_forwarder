@@ -2,9 +2,12 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
+	"sync"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"gopkg.in/yaml.v3"
 )
 
@@ -253,4 +256,157 @@ func (c *Config) validate() error {
 	}
 
 	return nil
+}
+
+// ConfigWatcher handles automatic configuration reloading
+type ConfigWatcher struct {
+	configPath string
+	config     *Config
+	mutex      sync.RWMutex
+	watcher    *fsnotify.Watcher
+	logger     *slog.Logger
+	callbacks  []func(*Config)
+}
+
+// NewConfigWatcher creates a new configuration watcher
+func NewConfigWatcher(configPath string, logger *slog.Logger) (*ConfigWatcher, error) {
+	// Load initial configuration
+	config, err := LoadConfig(configPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load initial config: %w", err)
+	}
+
+	// Create file watcher
+	watcher, err := fsnotify.NewWatcher()
+	if err != nil {
+		return nil, fmt.Errorf("failed to create file watcher: %w", err)
+	}
+
+	cw := &ConfigWatcher{
+		configPath: configPath,
+		config:     config,
+		watcher:    watcher,
+		logger:     logger,
+		callbacks:  make([]func(*Config), 0),
+	}
+
+	// Add config file to watcher
+	if err := watcher.Add(configPath); err != nil {
+		watcher.Close()
+		return nil, fmt.Errorf("failed to watch config file: %w", err)
+	}
+
+	// Start watching in background
+	go cw.watchLoop()
+
+	return cw, nil
+}
+
+// GetConfig returns the current configuration (thread-safe)
+func (cw *ConfigWatcher) GetConfig() *Config {
+	cw.mutex.RLock()
+	defer cw.mutex.RUnlock()
+	return cw.config
+}
+
+// AddReloadCallback adds a callback function that will be called when config is reloaded
+func (cw *ConfigWatcher) AddReloadCallback(callback func(*Config)) {
+	cw.mutex.Lock()
+	defer cw.mutex.Unlock()
+	cw.callbacks = append(cw.callbacks, callback)
+}
+
+// watchLoop monitors the config file for changes
+func (cw *ConfigWatcher) watchLoop() {
+	for {
+		select {
+		case event, ok := <-cw.watcher.Events:
+			if !ok {
+				return
+			}
+
+			// Handle file write events
+			if event.Has(fsnotify.Write) {
+				cw.logger.Info("🔄 检测到配置文件变更，正在重新加载...", "file", event.Name)
+				if err := cw.reloadConfig(); err != nil {
+					cw.logger.Error("❌ 配置文件重新加载失败", "error", err)
+				} else {
+					cw.logger.Info("✅ 配置文件重新加载成功")
+				}
+			}
+
+			// Handle file rename/remove events (some editors rename files during save)
+			if event.Has(fsnotify.Remove) || event.Has(fsnotify.Rename) {
+				// Re-add the file to watcher in case it was recreated
+				time.Sleep(100 * time.Millisecond) // Give time for the file to be recreated
+				if _, err := os.Stat(cw.configPath); err == nil {
+					cw.watcher.Add(cw.configPath)
+					cw.logger.Info("🔄 重新监听配置文件", "file", cw.configPath)
+				}
+			}
+
+		case err, ok := <-cw.watcher.Errors:
+			if !ok {
+				return
+			}
+			cw.logger.Error("⚠️ 配置文件监听错误", "error", err)
+		}
+	}
+}
+
+// reloadConfig reloads the configuration from file
+func (cw *ConfigWatcher) reloadConfig() error {
+	newConfig, err := LoadConfig(cw.configPath)
+	if err != nil {
+		return err
+	}
+
+	cw.mutex.Lock()
+	oldConfig := cw.config
+	cw.config = newConfig
+	callbacks := make([]func(*Config), len(cw.callbacks))
+	copy(callbacks, cw.callbacks)
+	cw.mutex.Unlock()
+
+	// Call all registered callbacks
+	for _, callback := range callbacks {
+		callback(newConfig)
+	}
+
+	// Log configuration changes
+	cw.logConfigChanges(oldConfig, newConfig)
+
+	return nil
+}
+
+// logConfigChanges logs the key differences between old and new configurations
+func (cw *ConfigWatcher) logConfigChanges(oldConfig, newConfig *Config) {
+	if len(oldConfig.Endpoints) != len(newConfig.Endpoints) {
+		cw.logger.Info("📡 端点数量变更",
+			"old_count", len(oldConfig.Endpoints),
+			"new_count", len(newConfig.Endpoints))
+	}
+
+	if oldConfig.Server.Port != newConfig.Server.Port {
+		cw.logger.Info("🌐 服务器端口变更",
+			"old_port", oldConfig.Server.Port,
+			"new_port", newConfig.Server.Port)
+	}
+
+	if oldConfig.Strategy.Type != newConfig.Strategy.Type {
+		cw.logger.Info("🎯 策略类型变更",
+			"old_strategy", oldConfig.Strategy.Type,
+			"new_strategy", newConfig.Strategy.Type)
+	}
+
+	if oldConfig.Auth.Enabled != newConfig.Auth.Enabled {
+		cw.logger.Info("🔐 鉴权状态变更",
+			"old_enabled", oldConfig.Auth.Enabled,
+			"new_enabled", newConfig.Auth.Enabled)
+	}
+}
+
+// Close stops the configuration watcher
+func (cw *ConfigWatcher) Close() error {
+	return cw.watcher.Close()
 }

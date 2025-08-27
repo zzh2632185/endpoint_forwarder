@@ -43,3 +43,8 @@ func (am *AuthMiddleware) Wrap(next http.Handler) http.Handler {
 		next.ServeHTTP(w, r)
 	})
 }
+
+// UpdateConfig updates the auth middleware configuration
+func (am *AuthMiddleware) UpdateConfig(cfg config.AuthConfig) {
+	am.config = cfg
+}

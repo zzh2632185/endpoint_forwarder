@@ -254,3 +254,21 @@ func SortByResponseTime(results []*FastTestResult) []*FastTestResult {
 
 	return successful
 }
+
+// UpdateConfig updates the fast tester configuration and recreates client if needed
+func (ft *FastTester) UpdateConfig(cfg *config.Config) {
+	ft.config = cfg
+	
+	// Recreate client with new timeout and transport settings
+	if transport, err := transport.CreateTransport(cfg); err == nil {
+		ft.client = &http.Client{
+			Timeout:   cfg.Strategy.FastTestTimeout,
+			Transport: transport,
+		}
+	}
+	
+	// Clear cache when configuration changes
+	ft.cacheMutex.Lock()
+	ft.resultCache = make(map[string]*FastTestResult)
+	ft.cacheMutex.Unlock()
+}

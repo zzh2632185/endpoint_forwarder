@@ -39,15 +39,23 @@ func main() {
 		os.Exit(0)
 	}
 
-	// Load configuration
-	cfg, err := config.LoadConfig(*configPath)
+	// Setup initial logger (will be updated when config is loaded)
+	logger := setupLogger(config.LoggingConfig{Level: "info", Format: "text"})
+	slog.SetDefault(logger)
+
+	// Create configuration watcher
+	configWatcher, err := config.NewConfigWatcher(*configPath, logger)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to load configuration: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Failed to create configuration watcher: %v\n", err)
 		os.Exit(1)
 	}
+	defer configWatcher.Close()
 
-	// Setup logger
-	logger := setupLogger(cfg.Logging)
+	// Get initial configuration
+	cfg := configWatcher.GetConfig()
+
+	// Update logger with config settings
+	logger = setupLogger(cfg.Logging)
 	slog.SetDefault(logger)
 
 	logger.Info("🚀 Claude Request Forwarder 启动中...",
@@ -81,6 +89,26 @@ func main() {
 	loggingMiddleware := middleware.NewLoggingMiddleware(logger)
 	monitoringMiddleware := middleware.NewMonitoringMiddleware(endpointManager)
 	authMiddleware := middleware.NewAuthMiddleware(cfg.Auth)
+
+	// Setup configuration reload callback to update components
+	configWatcher.AddReloadCallback(func(newCfg *config.Config) {
+		// Update logger
+		newLogger := setupLogger(newCfg.Logging)
+		slog.SetDefault(newLogger)
+		
+		// Update endpoint manager
+		endpointManager.UpdateConfig(newCfg)
+		
+		// Update proxy handler
+		proxyHandler.UpdateConfig(newCfg)
+		
+		// Update auth middleware
+		authMiddleware.UpdateConfig(newCfg.Auth)
+		
+		newLogger.Info("🔄 所有组件已更新为新配置")
+	})
+
+	logger.Info("🔄 配置文件自动重载已启用")
 
 	// Setup HTTP server
 	mux := http.NewServeMux()

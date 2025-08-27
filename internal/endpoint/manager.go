@@ -95,6 +95,37 @@ func (m *Manager) Stop() {
 	m.wg.Wait()
 }
 
+// UpdateConfig updates the manager configuration and recreates endpoints
+func (m *Manager) UpdateConfig(cfg *config.Config) {
+	m.config = cfg
+	
+	// Recreate endpoints with new configuration
+	endpoints := make([]*Endpoint, len(cfg.Endpoints))
+	for i, epCfg := range cfg.Endpoints {
+		endpoints[i] = &Endpoint{
+			Config: epCfg,
+			Status: EndpointStatus{
+				Healthy:   true,
+				LastCheck: time.Now(),
+			},
+		}
+	}
+	m.endpoints = endpoints
+	
+	// Update fast tester with new config
+	if m.fastTester != nil {
+		m.fastTester.UpdateConfig(cfg)
+	}
+	
+	// Recreate transport with new proxy configuration
+	if transport, err := transport.CreateTransport(cfg); err == nil {
+		m.client = &http.Client{
+			Transport: transport,
+			Timeout:   cfg.Health.Timeout,
+		}
+	}
+}
+
 // GetHealthyEndpoints returns a list of healthy endpoints based on strategy
 func (m *Manager) GetHealthyEndpoints() []*Endpoint {
 	var healthy []*Endpoint

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -71,10 +72,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // handleRegularRequest handles non-streaming requests
 func (h *Handler) handleRegularRequest(ctx context.Context, w http.ResponseWriter, r *http.Request, bodyBytes []byte) {
-	var lastErr error
 	var selectedEndpointName string
 	
-	operation := func(ep *endpoint.Endpoint) error {
+	operation := func(ep *endpoint.Endpoint) (*http.Response, error) {
 		// Store the selected endpoint name for logging
 		selectedEndpointName = ep.Config.Name
 		
@@ -86,7 +86,7 @@ func (h *Handler) handleRegularRequest(ctx context.Context, w http.ResponseWrite
 
 		req, err := http.NewRequestWithContext(ctx, r.Method, targetURL, bytes.NewReader(bodyBytes))
 		if err != nil {
-			return fmt.Errorf("failed to create request: %w", err)
+			return nil, fmt.Errorf("failed to create request: %w", err)
 		}
 
 		// Copy headers from original request
@@ -95,7 +95,7 @@ func (h *Handler) handleRegularRequest(ctx context.Context, w http.ResponseWrite
 		// Create HTTP client with timeout and proxy support
 		httpTransport, err := transport.CreateTransport(h.config)
 		if err != nil {
-			return fmt.Errorf("failed to create transport: %w", err)
+			return nil, fmt.Errorf("failed to create transport: %w", err)
 		}
 		
 		client := &http.Client{
@@ -106,31 +106,15 @@ func (h *Handler) handleRegularRequest(ctx context.Context, w http.ResponseWrite
 		// Make the request
 		resp, err := client.Do(req)
 		if err != nil {
-			return fmt.Errorf("request failed: %w", err)
-		}
-		defer resp.Body.Close()
-
-		// Copy response headers
-		for key, values := range resp.Header {
-			for _, value := range values {
-				w.Header().Add(key, value)
-			}
+			return nil, fmt.Errorf("request failed: %w", err)
 		}
 
-		// Set status code
-		w.WriteHeader(resp.StatusCode)
-
-		// Copy response body
-		_, err = io.Copy(w, resp.Body)
-		if err != nil {
-			return fmt.Errorf("failed to copy response body: %w", err)
-		}
-
-		return nil
+		// Return the response - retry logic will check status code
+		return resp, nil
 	}
 
 	// Execute with retry logic
-	lastErr = h.retryHandler.Execute(operation)
+	finalResp, lastErr := h.retryHandler.ExecuteWithContext(ctx, operation)
 	
 	// Store selected endpoint info in request context for logging
 	if selectedEndpointName != "" {
@@ -145,6 +129,31 @@ func (h *Handler) handleRegularRequest(ctx context.Context, w http.ResponseWrite
 			// If all retries failed, return error
 			http.Error(w, "All endpoints failed: "+lastErr.Error(), http.StatusBadGateway)
 		}
+		return
+	}
+
+	if finalResp == nil {
+		http.Error(w, "No response received from any endpoint", http.StatusBadGateway)
+		return
+	}
+
+	defer finalResp.Body.Close()
+
+	// Copy response headers
+	for key, values := range finalResp.Header {
+		for _, value := range values {
+			w.Header().Add(key, value)
+		}
+	}
+
+	// Set status code
+	w.WriteHeader(finalResp.StatusCode)
+
+	// Copy response body
+	_, err := io.Copy(w, finalResp.Body)
+	if err != nil {
+		// Log the error but don't return error to client as headers are already written
+		slog.Error("Failed to copy response body", "error", err)
 	}
 }
 
@@ -200,4 +209,12 @@ func (h *Handler) copyHeaders(src *http.Request, dst *http.Request, ep *endpoint
 	for _, header := range hopByHopHeaders {
 		dst.Header.Del(header)
 	}
+}
+
+// UpdateConfig updates the handler configuration
+func (h *Handler) UpdateConfig(cfg *config.Config) {
+	h.config = cfg
+	
+	// Update retry handler with new config
+	h.retryHandler.UpdateConfig(cfg)
 }
