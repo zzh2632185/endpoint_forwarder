@@ -37,8 +37,8 @@ type responseWriter struct {
 func (rw *responseWriter) WriteHeader(code int) {
 	if rw.statusCode == 0 {
 		rw.statusCode = code
+		rw.ResponseWriter.WriteHeader(code)
 	}
-	rw.ResponseWriter.WriteHeader(code)
 }
 
 func (rw *responseWriter) Write(b []byte) (int, error) {

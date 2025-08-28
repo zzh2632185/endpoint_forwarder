@@ -45,6 +45,7 @@ type Metrics struct {
 	// Historical data (circular buffer)
 	RequestHistory    []RequestDataPoint
 	ResponseHistory   []ResponseTimePoint
+	TokenHistory      []TokenHistoryPoint
 	MaxHistoryPoints  int
 }
 
@@ -81,6 +82,7 @@ type ConnectionInfo struct {
 	BytesReceived  int64
 	BytesSent      int64
 	IsStreaming    bool
+	TokenUsage     TokenUsage  // Token usage for this connection
 }
 
 // RequestDataPoint represents a point in time for request metrics
@@ -99,6 +101,16 @@ type ResponseTimePoint struct {
 	MaxTime      time.Duration
 }
 
+// TokenHistoryPoint represents token usage at a point in time
+type TokenHistoryPoint struct {
+	Timestamp           time.Time
+	InputTokens         int64
+	OutputTokens        int64
+	CacheCreationTokens int64
+	CacheReadTokens     int64
+	TotalTokens         int64
+}
+
 // NewMetrics creates a new metrics instance
 func NewMetrics() *Metrics {
 	return &Metrics{
@@ -108,6 +120,7 @@ func NewMetrics() *Metrics {
 		StartTime:         time.Now(),
 		RequestHistory:    make([]RequestDataPoint, 0),
 		ResponseHistory:   make([]ResponseTimePoint, 0),
+		TokenHistory:      make([]TokenHistoryPoint, 0),
 		MaxHistoryPoints:  300, // 5 minutes of data at 1-second intervals
 		MinResponseTime:   time.Duration(0),
 		MaxResponseTime:   time.Duration(0),
@@ -322,6 +335,7 @@ func (m *Metrics) GetMetrics() *Metrics {
 		StartTime:          m.StartTime,
 		EndpointStats:      make(map[string]*EndpointMetrics),
 		ActiveConnections:  make(map[string]*ConnectionInfo),
+		ConnectionHistory:  make([]*ConnectionInfo, len(m.ConnectionHistory)),
 	}
 
 	// Copy endpoint stats
@@ -360,6 +374,28 @@ func (m *Metrics) GetMetrics() *Metrics {
 			BytesReceived: v.BytesReceived,
 			BytesSent:     v.BytesSent,
 			IsStreaming:   v.IsStreaming,
+			TokenUsage:    v.TokenUsage,
+		}
+	}
+
+	// Copy connection history
+	for i, v := range m.ConnectionHistory {
+		snapshot.ConnectionHistory[i] = &ConnectionInfo{
+			ID:            v.ID,
+			ClientIP:      v.ClientIP,
+			UserAgent:     v.UserAgent,
+			StartTime:     v.StartTime,
+			LastActivity:  v.LastActivity,
+			Method:        v.Method,
+			Path:          v.Path,
+			Endpoint:      v.Endpoint,
+			Port:          v.Port,
+			RetryCount:    v.RetryCount,
+			Status:        v.Status,
+			BytesReceived: v.BytesReceived,
+			BytesSent:     v.BytesSent,
+			IsStreaming:   v.IsStreaming,
+			TokenUsage:    v.TokenUsage,
 		}
 	}
 
@@ -429,6 +465,23 @@ func (m *Metrics) RecordTokenUsage(connID string, endpoint string, tokens *Token
 	m.TotalTokenUsage.CacheCreationTokens += tokens.CacheCreationTokens
 	m.TotalTokenUsage.CacheReadTokens += tokens.CacheReadTokens
 
+	// Record token history point
+	historyPoint := TokenHistoryPoint{
+		Timestamp:           time.Now(),
+		InputTokens:         m.TotalTokenUsage.InputTokens,
+		OutputTokens:        m.TotalTokenUsage.OutputTokens,
+		CacheCreationTokens: m.TotalTokenUsage.CacheCreationTokens,
+		CacheReadTokens:     m.TotalTokenUsage.CacheReadTokens,
+		TotalTokens:         m.TotalTokenUsage.InputTokens + m.TotalTokenUsage.OutputTokens,
+	}
+	
+	m.TokenHistory = append(m.TokenHistory, historyPoint)
+	
+	// Limit token history size
+	if len(m.TokenHistory) > m.MaxHistoryPoints {
+		m.TokenHistory = m.TokenHistory[len(m.TokenHistory)-m.MaxHistoryPoints:]
+	}
+
 	// Update endpoint-specific token metrics
 	if endpoint != "unknown" && m.EndpointStats[endpoint] != nil {
 		m.EndpointStats[endpoint].TokenUsage.InputTokens += tokens.InputTokens
@@ -439,7 +492,11 @@ func (m *Metrics) RecordTokenUsage(connID string, endpoint string, tokens *Token
 
 	// Update connection info if available
 	if conn, exists := m.ActiveConnections[connID]; exists {
-		// We could add token info to connection if needed
+		// Update token usage for this connection
+		conn.TokenUsage.InputTokens += tokens.InputTokens
+		conn.TokenUsage.OutputTokens += tokens.OutputTokens
+		conn.TokenUsage.CacheCreationTokens += tokens.CacheCreationTokens
+		conn.TokenUsage.CacheReadTokens += tokens.CacheReadTokens
 		conn.LastActivity = time.Now()
 	}
 }
@@ -450,6 +507,17 @@ func (m *Metrics) GetTotalTokenStats() TokenUsage {
 	defer m.mu.RUnlock()
 
 	return m.TotalTokenUsage
+}
+
+// GetTokenHistory returns the token usage history
+func (m *Metrics) GetTokenHistory() []TokenHistoryPoint {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	// Return a copy of the token history
+	history := make([]TokenHistoryPoint, len(m.TokenHistory))
+	copy(history, m.TokenHistory)
+	return history
 }
 
 // generateConnectionID generates a unique connection ID

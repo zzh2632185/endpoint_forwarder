@@ -98,11 +98,8 @@ func (tp *TokenParser) parseMessageDelta() *monitor.TokenUsage {
 		CacheReadTokens:        messageDelta.Usage.CacheReadInputTokens,
 	}
 
-	slog.Info(fmt.Sprintf("🪙 [Token Parser] Extracted token usage from SSE stream",
-		"input_tokens", tokenUsage.InputTokens,
-		"output_tokens", tokenUsage.OutputTokens,
-		"cache_creation_tokens", tokenUsage.CacheCreationTokens,
-		"cache_read_tokens", tokenUsage.CacheReadTokens))
+	slog.Debug(fmt.Sprintf("🪙 [Token Parser] 从SSE流中提取令牌使用情况 - 输入: %d, 输出: %d, 缓存创建: %d, 缓存读取: %d",
+		tokenUsage.InputTokens, tokenUsage.OutputTokens, tokenUsage.CacheCreationTokens, tokenUsage.CacheReadTokens))
 
 	return tokenUsage
 }

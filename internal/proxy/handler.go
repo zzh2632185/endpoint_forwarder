@@ -190,6 +190,14 @@ func (h *Handler) handleRegularRequest(ctx context.Context, w http.ResponseWrite
 
 	bodyContent := string(bodyBytes)
 	
+	// Debug logging: print first 200 characters of server response
+	debugContent := bodyContent
+	if len(debugContent) > 200 {
+		debugContent = debugContent[:200]
+	}
+	slog.DebugContext(ctx, fmt.Sprintf("🐛 [调试响应] 端点: %s, 状态码: %d, 长度: %d字节, 内容前200字符: %s", 
+		selectedEndpointName, finalResp.StatusCode, len(bodyContent), debugContent))
+	
 	// Analyze the complete response for token usage
 	h.analyzeResponseForTokens(ctx, bodyContent, selectedEndpointName, r)
 	

@@ -49,7 +49,7 @@ func (v *OverviewView) setupUI() {
 	v.metricsBox.SetBorder(true).SetTitle(" 📊 Request Metrics ").SetTitleAlign(tview.AlignLeft)
 
 	v.chartBox = tview.NewTextView().SetDynamicColors(true).SetScrollable(false)
-	v.chartBox.SetBorder(true).SetTitle(" 📈 Response Time Trend ").SetTitleAlign(tview.AlignLeft)
+	v.chartBox.SetBorder(true).SetTitle(" 🪙 Historical Token Usage ").SetTitleAlign(tview.AlignLeft)
 
 	v.endpointsBox = tview.NewTextView().SetDynamicColors(true).SetScrollable(false)
 	v.endpointsBox.SetBorder(true).SetTitle(" 🎯 Endpoints Status ").SetTitleAlign(tview.AlignLeft)
@@ -66,8 +66,8 @@ func (v *OverviewView) setupUI() {
 		AddItem(v.systemBox, 0, 1, false)
 
 	v.container = tview.NewFlex().SetDirection(tview.FlexRow).
-		AddItem(topFlex, 8, 0, false).    // Fixed height for top section
-		AddItem(bottomFlex, 0, 1, false)  // Remaining space for bottom
+		AddItem(topFlex, 12, 0, false).   // Increased height for top section (Request Metrics + Historical Token Usage)  
+		AddItem(bottomFlex, 0, 1, false)  // Remaining space for bottom (Endpoints Status + System Info)
 }
 
 func (v *OverviewView) GetPrimitive() tview.Primitive {
@@ -98,11 +98,11 @@ func (v *OverviewView) Update() {
 [white::b]Avg Response Time:[white::-] [cyan]%8s[white]
 
 [yellow::b]🪙 Token Usage[white::-]
-[white::b]Input Tokens:[white::-] [cyan]%8d[white]
-[white::b]Output Tokens:[white::-] [cyan]%8d[white]
-[white::b]Cache Creation:[white::-] [cyan]%8d[white]
-[white::b]Cache Read:[white::-] [cyan]%8d[white]
-[white::b]Total Tokens:[white::-] [magenta]%8d[white]`,
+[white::b]📥 Input Tokens:[white::-] [cyan]%8d[white]
+[white::b]📤 Output Tokens:[white::-] [cyan]%8d[white]
+[white::b]🆕 Cache Creation:[white::-] [cyan]%8d[white]
+[white::b]📖 Cache Read:[white::-] [cyan]%8d[white]
+[white::b]🔢 Total Tokens:[white::-] [magenta]%8d[white]`,
 		metrics.TotalRequests,
 		metrics.SuccessfulRequests, successRate,
 		metrics.FailedRequests, 100-successRate,
@@ -119,42 +119,67 @@ func (v *OverviewView) Update() {
 		v.metricsBox.SetText(metricsText)
 	}
 	
-	// Token usage chart in place of response time trending
-	if totalTokens > 0 {
-		inputRatio := float64(tokenStats.InputTokens) / float64(totalTokens) * 10
-		outputRatio := float64(tokenStats.OutputTokens) / float64(totalTokens) * 10
-		cacheRatio := float64(tokenStats.CacheCreationTokens + tokenStats.CacheReadTokens) / float64(totalTokens) * 10
-		
-		// Ensure ratios are within bounds [0, 10] to prevent negative strings.Repeat
-		inputFilled := int(inputRatio)
-		if inputFilled < 0 { inputFilled = 0 }
-		if inputFilled > 10 { inputFilled = 10 }
-		inputEmpty := 10 - inputFilled
-		
-		outputFilled := int(outputRatio)
-		if outputFilled < 0 { outputFilled = 0 }
-		if outputFilled > 10 { outputFilled = 10 }
-		outputEmpty := 10 - outputFilled
-		
-		cacheFilled := int(cacheRatio)
-		if cacheFilled < 0 { cacheFilled = 0 }
-		if cacheFilled > 10 { cacheFilled = 10 }
-		cacheEmpty := 10 - cacheFilled
-		
-		inputBar := strings.Repeat("█", inputFilled) + strings.Repeat("░", inputEmpty)
-		outputBar := strings.Repeat("█", outputFilled) + strings.Repeat("░", outputEmpty)
-		cacheBar := strings.Repeat("█", cacheFilled) + strings.Repeat("░", cacheEmpty)
-		
-		v.chartBox.SetText(fmt.Sprintf(`[yellow::b]🪙 Token Distribution[white::-]
-[cyan]%s[white] Input (%d)
-[green]%s[white] Output (%d)  
-[magenta]%s[white] Cache (%d)`, 
-			inputBar, tokenStats.InputTokens,
-			outputBar, tokenStats.OutputTokens,
-			cacheBar, tokenStats.CacheCreationTokens + tokenStats.CacheReadTokens))
-	} else {
-		v.chartBox.SetText("[gray]No token usage data yet...\n[yellow]🪙 Token statistics will appear here\n[gray]after processing Claude API requests[white]")
+	// Historical token usage from past connections
+	connectionHistory := metrics.ConnectionHistory
+	
+	// Show token usage for the last 3 connections that have token data
+	var chartText strings.Builder
+	chartText.WriteString("[yellow::b]🪙 Historical Token Usage[white::-]\n")
+	chartText.WriteString("[gray]Past connections with token consumption:[white]\n\n")
+	
+	// Filter connections that have token usage and get the most recent 3
+	var connectionsWithTokens []*monitor.ConnectionInfo
+	for i := len(connectionHistory) - 1; i >= 0 && len(connectionsWithTokens) < 3; i-- {
+		conn := connectionHistory[i]
+		totalTokens := conn.TokenUsage.InputTokens + conn.TokenUsage.OutputTokens + 
+					   conn.TokenUsage.CacheCreationTokens + conn.TokenUsage.CacheReadTokens
+		if totalTokens > 0 {
+			connectionsWithTokens = append(connectionsWithTokens, conn)
+		}
 	}
+	
+	if len(connectionsWithTokens) > 0 {
+		for i, conn := range connectionsWithTokens {
+			totalTokens := conn.TokenUsage.InputTokens + conn.TokenUsage.OutputTokens
+			totalCacheTokens := conn.TokenUsage.CacheCreationTokens + conn.TokenUsage.CacheReadTokens
+			
+			// Format connection info
+			clientIP := truncateString(conn.ClientIP, 12)
+			endpoint := truncateString(conn.Endpoint, 10)
+			if endpoint == "" || endpoint == "unknown" {
+				endpoint = "pending"
+			}
+			
+			// Status color
+			statusColor := "green"
+			statusText := "✓"
+			if conn.Status == "failed" {
+				statusColor = "red" 
+				statusText = "✗"
+			}
+			
+			chartText.WriteString(fmt.Sprintf("%d. [%s]%s[white] [cyan]%-12s[white] -> [yellow]%-10s[white]\n",
+				i+1, statusColor, statusText, clientIP, endpoint))
+			chartText.WriteString(fmt.Sprintf("   📥[cyan]%4d[white] 📤[cyan]%4d[white] 🆕[cyan]%3d[white] 📖[cyan]%3d[white] 🔢[magenta]%5d[white]\n\n",
+				conn.TokenUsage.InputTokens, conn.TokenUsage.OutputTokens,
+				conn.TokenUsage.CacheCreationTokens, conn.TokenUsage.CacheReadTokens,
+				totalTokens + totalCacheTokens))
+		}
+
+		// Fill remaining lines if fewer than 3 connections
+		for i := len(connectionsWithTokens); i < 3; i++ {
+			chartText.WriteString(fmt.Sprintf("%d. [gray]─[white]\n\n", i+1))
+		}
+	} else {
+		chartText.WriteString("[gray]No connections with token usage yet...\n")
+		chartText.WriteString("Token consumption history will appear here\n")
+		chartText.WriteString("after processing Claude API requests.\n\n")
+		for i := 0; i < 3; i++ {
+			chartText.WriteString(fmt.Sprintf("%d. [gray]─[white]\n\n", i+1))
+		}
+	}
+	
+	v.chartBox.SetText(chartText.String())
 	
 	// Endpoints status - maintain consistent formatting
 	endpoints := v.endpointManager.GetAllEndpoints()
@@ -407,12 +432,12 @@ func (v *EndpointsView) updateDetails() {
 		// Token Usage Metrics
 		if endpointStats.TokenUsage.InputTokens > 0 || endpointStats.TokenUsage.OutputTokens > 0 {
 			detailText.WriteString("\n[yellow::b]🪙 Token Usage[white::-]\n")
-			detailText.WriteString(fmt.Sprintf("Input Tokens: [cyan]%d[white]\n", endpointStats.TokenUsage.InputTokens))
-			detailText.WriteString(fmt.Sprintf("Output Tokens: [cyan]%d[white]\n", endpointStats.TokenUsage.OutputTokens))
-			detailText.WriteString(fmt.Sprintf("Cache Creation: [cyan]%d[white]\n", endpointStats.TokenUsage.CacheCreationTokens))
-			detailText.WriteString(fmt.Sprintf("Cache Read: [cyan]%d[white]\n", endpointStats.TokenUsage.CacheReadTokens))
+			detailText.WriteString(fmt.Sprintf("📥 Input Tokens: [cyan]%d[white]\n", endpointStats.TokenUsage.InputTokens))
+			detailText.WriteString(fmt.Sprintf("📤 Output Tokens: [cyan]%d[white]\n", endpointStats.TokenUsage.OutputTokens))
+			detailText.WriteString(fmt.Sprintf("🆕 Cache Creation: [cyan]%d[white]\n", endpointStats.TokenUsage.CacheCreationTokens))
+			detailText.WriteString(fmt.Sprintf("📖 Cache Read: [cyan]%d[white]\n", endpointStats.TokenUsage.CacheReadTokens))
 			totalTokens := endpointStats.TokenUsage.InputTokens + endpointStats.TokenUsage.OutputTokens
-			detailText.WriteString(fmt.Sprintf("Total Tokens: [magenta]%d[white]\n", totalTokens))
+			detailText.WriteString(fmt.Sprintf("🔢 Total Tokens: [magenta]%d[white]\n", totalTokens))
 		}
 	} else {
 		detailText.WriteString("\n[yellow::b]Performance Metrics[white::-]\n")

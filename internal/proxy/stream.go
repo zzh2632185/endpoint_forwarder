@@ -321,6 +321,10 @@ func (h *Handler) streamResponseByBytes(ctx context.Context, w http.ResponseWrit
 	// Initialize token parser for extracting usage statistics
 	tokenParser := NewTokenParser()
 	slog.InfoContext(ctx, "🔧 [Token Parser] 初始化完成，准备解析Claude API的令牌使用统计", "endpoint", endpointName, "connID", connID)
+	
+	// Initialize debug accumulator for SSE events
+	var accumulatedEvents strings.Builder
+	eventCounter := 0
 
 	// Create a small buffer for reading bytes
 	buffer := make([]byte, 1024)
@@ -359,6 +363,29 @@ func (h *Handler) streamResponseByBytes(ctx context.Context, w http.ResponseWrit
 					if b == '\n' || len(lineBuffer) >= 512 {
 						// Parse the line for token usage before writing to client
 						line := string(lineBuffer)
+						
+						// Accumulate SSE events for debug logging
+						eventCounter++
+						accumulatedEvents.WriteString(line)
+						if len(line) > 0 && line[len(line)-1] != '\n' {
+							accumulatedEvents.WriteString("\n")
+						}
+						
+						// Debug logging: log accumulated SSE events every 10 events or when reaching 500 chars
+						accumulatedContent := accumulatedEvents.String()
+						if eventCounter%10 == 0 || len(accumulatedContent) > 500 {
+							debugContent := accumulatedContent
+							if len(debugContent) > 200 {
+								debugContent = debugContent[:200]
+							}
+							slog.InfoContext(ctx, fmt.Sprintf("🐛 [调试SSE] 端点: %s, 事件数: %d, 总长度: %d字节, 累积SSE事件前200字符: %s", 
+								endpointName, eventCounter, len(accumulatedContent), debugContent))
+							
+							// Reset accumulator if it gets too large
+							if len(accumulatedContent) > 1000 {
+								accumulatedEvents.Reset()
+							}
+						}
 						
 						// Always try to parse each line, with detailed logging
 						slog.Debug("🔍 [Stream Parser] Processing line", "line", line, "lineLength", len(line))
@@ -411,6 +438,20 @@ func (h *Handler) streamResponseByBytes(ctx context.Context, w http.ResponseWrit
 						// Try to parse the final line for tokens
 						line := string(lineBuffer)
 						slog.Debug("🔍 [Stream Parser] Processing final line", "line", line, "lineLength", len(line))
+						
+						// Add final line to accumulated events and log final summary
+						eventCounter++
+						accumulatedEvents.WriteString(line)
+						finalAccumulatedContent := accumulatedEvents.String()
+						if len(finalAccumulatedContent) > 0 {
+							debugContent := finalAccumulatedContent
+							if len(debugContent) > 200 {
+								debugContent = debugContent[:200]
+							}
+							slog.InfoContext(ctx, fmt.Sprintf("🐛 [调试SSE最终] 端点: %s, 总事件数: %d, 总长度: %d字节, 最终累积SSE事件前200字符: %s", 
+								endpointName, eventCounter, len(finalAccumulatedContent), debugContent))
+						}
+						
 						if tokenUsage := tokenParser.ParseSSELine(line); tokenUsage != nil {
 							// Record token usage if we have monitoring middleware
 							if mm, ok := h.retryHandler.monitoringMiddleware.(interface{
