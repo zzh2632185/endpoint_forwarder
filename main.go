@@ -68,7 +68,10 @@ func main() {
 	// Apply command line primary endpoint override
 	if *primaryEndpoint != "" {
 		cfg.PrimaryEndpoint = *primaryEndpoint
-		cfg.ApplyPrimaryEndpoint()
+		if err := cfg.ApplyPrimaryEndpoint(logger); err != nil {
+			logger.Error(fmt.Sprintf("❌ 主端点配置失败: %v", err))
+			os.Exit(1)
+		}
 	}
 
 	// Apply TUI configuration from config file and command line
@@ -98,11 +101,6 @@ func main() {
 			"config_file", *configPath,
 			"endpoints_count", len(cfg.Endpoints),
 			"strategy", cfg.Strategy.Type)
-		
-		// Display primary endpoint override if applied
-		if cfg.PrimaryEndpoint != "" {
-			logger.Info("🎯 已应用优先级覆盖设置", "primary_endpoint", cfg.PrimaryEndpoint)
-		}
 	}
 
 	// Display proxy configuration (only in non-TUI mode)
@@ -209,7 +207,7 @@ func main() {
 	// Check if server started successfully
 	select {
 	case err := <-serverErr:
-		logger.Error("❌ 服务器启动失败", "error", err)
+		logger.Error(fmt.Sprintf("❌ 服务器启动失败: %v", err))
 		os.Exit(1)
 	default:
 		// Server started successfully
@@ -254,7 +252,7 @@ func main() {
 		// Wait for TUI to exit or server error
 		select {
 		case err := <-serverErr:
-			logger.Error("❌ 服务器运行时错误", "error", err)
+			logger.Error(fmt.Sprintf("❌ 服务器运行时错误(在TUI模式): %v", err))
 			if tuiApp != nil {
 				tuiApp.Stop()
 			}
@@ -262,7 +260,7 @@ func main() {
 		case err := <-tuiErr:
 			logger.Info("📱 TUI界面已关闭")
 			if err != nil {
-				logger.Error("TUI运行错误", "error", err)
+				logger.Error(fmt.Sprintf("TUI运行错误: %v", err))
 			}
 		}
 	} else {
@@ -273,10 +271,10 @@ func main() {
 		// Block until we receive a signal or server error
 		select {
 		case err := <-serverErr:
-			logger.Error("❌ 服务器运行时错误", "error", err)
+			logger.Error(fmt.Sprintf("❌ 服务器运行时错误(在控制台模式): %v", err))
 			os.Exit(1)
 		case sig := <-interrupt:
-			logger.Info("📡 收到终止信号，开始优雅关闭...", "signal", sig)
+			logger.Info(fmt.Sprintf("📡 收到终止信号，开始优雅关闭... - 信号: %v", sig))
 		}
 	}
 
@@ -289,7 +287,7 @@ func main() {
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("❌ 服务器关闭失败", "error", err)
+		logger.Error(fmt.Sprintf("❌ 服务器关闭失败: %v", err))
 		os.Exit(1)
 	}
 

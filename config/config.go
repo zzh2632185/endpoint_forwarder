@@ -237,33 +237,60 @@ func (c *Config) setDefaults() {
 }
 
 // ApplyPrimaryEndpoint applies primary endpoint override from command line
-func (c *Config) ApplyPrimaryEndpoint() {
+// Returns error if the specified endpoint is not found
+func (c *Config) ApplyPrimaryEndpoint(logger *slog.Logger) error {
 	if c.PrimaryEndpoint == "" {
-		return
+		return nil
 	}
 	
 	// Find the specified endpoint
-	var primaryIndex = -1
-	for i, endpoint := range c.Endpoints {
-		if endpoint.Name == c.PrimaryEndpoint {
-			primaryIndex = i
-			break
-		}
-	}
-	
+	primaryIndex := c.findEndpointIndex(c.PrimaryEndpoint)
 	if primaryIndex == -1 {
-		return // Endpoint not found, ignore silently
+		// Create list of available endpoints for better error message
+		var availableEndpoints []string
+		for _, endpoint := range c.Endpoints {
+			availableEndpoints = append(availableEndpoints, endpoint.Name)
+		}
+		
+		err := fmt.Errorf("指定的主端点 '%s' 未找到，可用端点: %v", c.PrimaryEndpoint, availableEndpoints)
+		if logger != nil {
+			logger.Error(fmt.Sprintf("❌ 主端点设置失败 - 端点: %s, 可用端点: %v", 
+				c.PrimaryEndpoint, availableEndpoints))
+		}
+		return err
 	}
 	
-	// Set the primary endpoint to priority 1 and adjust others
+	// Store original priority for logging
+	originalPriority := c.Endpoints[primaryIndex].Priority
+	
+	// Set the primary endpoint to priority 1
 	c.Endpoints[primaryIndex].Priority = 1
 	
-	// Adjust other endpoints' priorities to be higher than 1
+	// Adjust other endpoints' priorities to ensure they are lower than primary
+	adjustedCount := 0
 	for i := range c.Endpoints {
 		if i != primaryIndex && c.Endpoints[i].Priority <= 1 {
-			c.Endpoints[i].Priority = c.Endpoints[i].Priority + 10 // Push other endpoints down
+			c.Endpoints[i].Priority = c.Endpoints[i].Priority + 2 // Use consistent increment
+			adjustedCount++
 		}
 	}
+	
+	if logger != nil {
+		logger.Info(fmt.Sprintf("✅ 主端点优先级设置成功 - 端点: %s, 原优先级: %d → 新优先级: %d, 调整了%d个其他端点",
+			c.PrimaryEndpoint, originalPriority, 1, adjustedCount))
+	}
+	
+	return nil
+}
+
+// findEndpointIndex finds the index of an endpoint by name
+func (c *Config) findEndpointIndex(name string) int {
+	for i, endpoint := range c.Endpoints {
+		if endpoint.Name == name {
+			return i
+		}
+	}
+	return -1
 }
 
 // validate validates the configuration
@@ -392,7 +419,7 @@ func (cw *ConfigWatcher) watchLoop() {
 				// Check if file was actually modified by comparing modification time
 				fileInfo, err := os.Stat(cw.configPath)
 				if err != nil {
-					cw.logger.Warn("⚠️ 无法获取配置文件信息", "error", err)
+					cw.logger.Warn(fmt.Sprintf("⚠️ 无法获取配置文件信息: %v", err))
 					continue
 				}
 
@@ -410,9 +437,9 @@ func (cw *ConfigWatcher) watchLoop() {
 
 				// Set up debounce timer to avoid multiple rapid reloads
 				cw.debounceTimer = time.AfterFunc(500*time.Millisecond, func() {
-					cw.logger.Info("🔄 检测到配置文件变更，正在重新加载...", "file", event.Name)
+					cw.logger.Info(fmt.Sprintf("🔄 检测到配置文件变更，正在重新加载... - 文件: %s", event.Name))
 					if err := cw.reloadConfig(); err != nil {
-						cw.logger.Error("❌ 配置文件重新加载失败", "error", err)
+						cw.logger.Error(fmt.Sprintf("❌ 配置文件重新加载失败: %v", err))
 					} else {
 						cw.logger.Info("✅ 配置文件重新加载成功")
 					}
@@ -425,7 +452,7 @@ func (cw *ConfigWatcher) watchLoop() {
 				time.Sleep(100 * time.Millisecond) // Give time for the file to be recreated
 				if _, err := os.Stat(cw.configPath); err == nil {
 					cw.watcher.Add(cw.configPath)
-					cw.logger.Info("🔄 重新监听配置文件", "file", cw.configPath)
+					cw.logger.Info(fmt.Sprintf("🔄 重新监听配置文件: %s", cw.configPath))
 				}
 			}
 
@@ -433,7 +460,7 @@ func (cw *ConfigWatcher) watchLoop() {
 			if !ok {
 				return
 			}
-			cw.logger.Error("⚠️ 配置文件监听错误", "error", err)
+			cw.logger.Error(fmt.Sprintf("⚠️ 配置文件监听错误: %v", err))
 		}
 	}
 }

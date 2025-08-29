@@ -46,7 +46,7 @@ func NewManager(cfg *config.Config) *Manager {
 	// Create transport with proxy support
 	httpTransport, err := transport.CreateTransport(cfg)
 	if err != nil {
-		slog.Error("❌ Failed to create HTTP transport with proxy", "error", err.Error())
+		slog.Error(fmt.Sprintf("❌ Failed to create HTTP transport with proxy: %s", err.Error()))
 		// Fall back to default transport
 		httpTransport = &http.Transport{}
 	}
