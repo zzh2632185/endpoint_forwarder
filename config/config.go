@@ -55,8 +55,14 @@ type HealthConfig struct {
 }
 
 type LoggingConfig struct {
-	Level  string `yaml:"level"`
-	Format string `yaml:"format"` // "json" or "text"
+	Level              string `yaml:"level"`
+	Format             string `yaml:"format"`               // "json" or "text"
+	FileEnabled        bool   `yaml:"file_enabled"`         // Enable file logging
+	FilePath           string `yaml:"file_path"`            // Log file path
+	MaxFileSize        string `yaml:"max_file_size"`        // Max file size (e.g., "100MB")
+	MaxFiles           int    `yaml:"max_files"`            // Max number of rotated files to keep
+	CompressRotated    bool   `yaml:"compress_rotated"`     // Compress rotated log files
+	DisableResponseLimit bool `yaml:"disable_response_limit"` // Disable response content output limit when file logging is enabled
 }
 
 type StreamingConfig struct {
@@ -164,6 +170,16 @@ func (c *Config) setDefaults() {
 	}
 	if c.Logging.Format == "" {
 		c.Logging.Format = "text"
+	}
+	// Set file logging defaults
+	if c.Logging.FileEnabled && c.Logging.FilePath == "" {
+		c.Logging.FilePath = "logs/app.log"
+	}
+	if c.Logging.FileEnabled && c.Logging.MaxFileSize == "" {
+		c.Logging.MaxFileSize = "100MB"
+	}
+	if c.Logging.FileEnabled && c.Logging.MaxFiles == 0 {
+		c.Logging.MaxFiles = 10
 	}
 	if c.Streaming.HeartbeatInterval == 0 {
 		c.Streaming.HeartbeatInterval = 30 * time.Second
