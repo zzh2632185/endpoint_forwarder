@@ -5,6 +5,9 @@
 *.so
 *.dylib
 
+# Project binary
+endpoint_forwarder
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -14,6 +17,7 @@
 # Go workspace file
 go.work
 
+.claude/
 # IDE files
 .vscode/
 .idea/
@@ -40,8 +44,9 @@ Thumbs.db
 # YAML files (exclude all yaml files except those in config directory)
 *.yaml
 
-# But include yaml files in config directory
+# But include yaml files in config directory except config.yaml
 !config/*.yaml
+config/config.yaml
 
 # Test files
 *_test_example.go

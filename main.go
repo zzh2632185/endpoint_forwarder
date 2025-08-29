@@ -24,6 +24,7 @@ var (
 	showVersion = flag.Bool("version", false, "Show version information")
 	enableTUI = flag.Bool("tui", true, "Enable TUI interface (default: true)")
 	disableTUI = flag.Bool("no-tui", false, "Disable TUI interface")
+	primaryEndpoint = flag.String("p", "", "Set primary endpoint with highest priority (endpoint name)")
 	
 	// Build-time variables (set via ldflags)
 	version = "dev"
@@ -64,6 +65,12 @@ func main() {
 	// Get initial configuration
 	cfg := configWatcher.GetConfig()
 
+	// Apply command line primary endpoint override
+	if *primaryEndpoint != "" {
+		cfg.PrimaryEndpoint = *primaryEndpoint
+		cfg.ApplyPrimaryEndpoint()
+	}
+
 	// Apply TUI configuration from config file and command line
 	if cfg.TUI.UpdateInterval == 0 {
 		cfg.TUI.UpdateInterval = 1 * time.Second // Default
@@ -91,6 +98,11 @@ func main() {
 			"config_file", *configPath,
 			"endpoints_count", len(cfg.Endpoints),
 			"strategy", cfg.Strategy.Type)
+		
+		// Display primary endpoint override if applied
+		if cfg.PrimaryEndpoint != "" {
+			logger.Info("🎯 已应用优先级覆盖设置", "primary_endpoint", cfg.PrimaryEndpoint)
+		}
 	}
 
 	// Display proxy configuration (only in non-TUI mode)
