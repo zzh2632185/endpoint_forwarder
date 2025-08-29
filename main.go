@@ -13,6 +13,7 @@ import (
 
 	"endpoint_forwarder/config"
 	"endpoint_forwarder/internal/endpoint"
+	"endpoint_forwarder/internal/logging"
 	"endpoint_forwarder/internal/middleware"
 	"endpoint_forwarder/internal/proxy"
 	"endpoint_forwarder/internal/tui"
@@ -33,6 +34,7 @@ var (
 	
 	// Runtime variables
 	startTime = time.Now()
+	currentLogHandler *SimpleHandler // Track current log handler for cleanup
 )
 
 func main() {
@@ -68,7 +70,10 @@ func main() {
 	// Apply command line primary endpoint override
 	if *primaryEndpoint != "" {
 		cfg.PrimaryEndpoint = *primaryEndpoint
-		cfg.ApplyPrimaryEndpoint()
+		if err := cfg.ApplyPrimaryEndpoint(logger); err != nil {
+			logger.Error(fmt.Sprintf("❌ 主端点配置失败: %v", err))
+			os.Exit(1)
+		}
 	}
 
 	// Apply TUI configuration from config file and command line
@@ -98,11 +103,6 @@ func main() {
 			"config_file", *configPath,
 			"endpoints_count", len(cfg.Endpoints),
 			"strategy", cfg.Strategy.Type)
-		
-		// Display primary endpoint override if applied
-		if cfg.PrimaryEndpoint != "" {
-			logger.Info("🎯 已应用优先级覆盖设置", "primary_endpoint", cfg.PrimaryEndpoint)
-		}
 	}
 
 	// Display proxy configuration (only in non-TUI mode)
@@ -209,7 +209,7 @@ func main() {
 	// Check if server started successfully
 	select {
 	case err := <-serverErr:
-		logger.Error("❌ 服务器启动失败", "error", err)
+		logger.Error(fmt.Sprintf("❌ 服务器启动失败: %v", err))
 		os.Exit(1)
 	default:
 		// Server started successfully
@@ -254,7 +254,7 @@ func main() {
 		// Wait for TUI to exit or server error
 		select {
 		case err := <-serverErr:
-			logger.Error("❌ 服务器运行时错误", "error", err)
+			logger.Error(fmt.Sprintf("❌ 服务器运行时错误(在TUI模式): %v", err))
 			if tuiApp != nil {
 				tuiApp.Stop()
 			}
@@ -262,7 +262,7 @@ func main() {
 		case err := <-tuiErr:
 			logger.Info("📱 TUI界面已关闭")
 			if err != nil {
-				logger.Error("TUI运行错误", "error", err)
+				logger.Error(fmt.Sprintf("TUI运行错误: %v", err))
 			}
 		}
 	} else {
@@ -273,10 +273,10 @@ func main() {
 		// Block until we receive a signal or server error
 		select {
 		case err := <-serverErr:
-			logger.Error("❌ 服务器运行时错误", "error", err)
+			logger.Error(fmt.Sprintf("❌ 服务器运行时错误(在控制台模式): %v", err))
 			os.Exit(1)
 		case sig := <-interrupt:
-			logger.Info("📡 收到终止信号，开始优雅关闭...", "signal", sig)
+			logger.Info(fmt.Sprintf("📡 收到终止信号，开始优雅关闭... - 信号: %v", sig))
 		}
 	}
 
@@ -285,11 +285,16 @@ func main() {
 		logger.Info("🛑 正在关闭服务器...")
 	}
 	
+	// Close log file handler before shutdown
+	if currentLogHandler != nil {
+		currentLogHandler.Close()
+	}
+	
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	if err := server.Shutdown(ctx); err != nil {
-		logger.Error("❌ 服务器关闭失败", "error", err)
+		logger.Error(fmt.Sprintf("❌ 服务器关闭失败: %v", err))
 		os.Exit(1)
 	}
 
@@ -314,9 +319,36 @@ func setupLogger(cfg config.LoggingConfig, tuiApp *tui.TUIApp) *slog.Logger {
 		level = slog.LevelInfo
 	}
 
+	var fileRotator *logging.FileRotator
+	// Setup file logging if enabled
+	if cfg.FileEnabled {
+		maxSize, err := logging.ParseSize(cfg.MaxFileSize)
+		if err != nil {
+			fmt.Printf("警告：无法解析日志文件大小配置 '%s'，使用默认值 100MB: %v\n", cfg.MaxFileSize, err)
+			maxSize = 100 * 1024 * 1024 // 100MB
+		}
+		
+		fileRotator, err = logging.NewFileRotator(cfg.FilePath, maxSize, cfg.MaxFiles, cfg.CompressRotated)
+		if err != nil {
+			fmt.Printf("警告：无法创建日志文件轮转器: %v\n", err)
+			fileRotator = nil
+		}
+	}
+
 	var handler slog.Handler
 	// Create a custom handler that only outputs the message
-	handler = &SimpleHandler{level: level, tuiApp: tuiApp}
+	handler = &SimpleHandler{
+		level: level, 
+		tuiApp: tuiApp, 
+		fileRotator: fileRotator,
+		disableFileResponseLimit: cfg.FileEnabled && cfg.DisableResponseLimit,
+	}
+	currentLogHandler = handler.(*SimpleHandler) // Store reference for cleanup
+	
+	// Debug: print file logging configuration
+	if cfg.FileEnabled {
+		fmt.Printf("🔧 文件日志已启用: 路径=%s, 禁用响应限制=%v\n", cfg.FilePath, cfg.DisableResponseLimit)
+	}
 
 	return slog.New(handler)
 }
@@ -325,6 +357,8 @@ func setupLogger(cfg config.LoggingConfig, tuiApp *tui.TUIApp) *slog.Logger {
 type SimpleHandler struct {
 	level slog.Level
 	tuiApp *tui.TUIApp
+	fileRotator *logging.FileRotator
+	disableFileResponseLimit bool // Whether to disable response limit for file output
 }
 
 func (h *SimpleHandler) Enabled(_ context.Context, level slog.Level) bool {
@@ -334,21 +368,42 @@ func (h *SimpleHandler) Enabled(_ context.Context, level slog.Level) bool {
 func (h *SimpleHandler) Handle(_ context.Context, r slog.Record) error {
 	message := r.Message
 	
+	// Format log message with timestamp for file output
+	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	level := "INFO"
+	switch r.Level {
+	case slog.LevelDebug:
+		level = "DEBUG"
+	case slog.LevelWarn:
+		level = "WARN"
+	case slog.LevelError:
+		level = "ERROR"
+	}
+	
+	// For file output - use full message if response limit is disabled
+	if h.fileRotator != nil {
+		fileMessage := message
+		// If disable file response limit is TRUE, don't truncate; if FALSE, truncate
+		if !h.disableFileResponseLimit && len(message) > 500 {
+			fileMessage = message[:500] + "... (文件日志截断)"
+		}
+		// When disableFileResponseLimit is true, fileMessage = message (no truncation)
+		formattedMessage := fmt.Sprintf("[%s] [%s] %s\n", timestamp, level, fileMessage)
+		h.fileRotator.Write([]byte(formattedMessage))
+	}
+	
+	// For UI/console output - always limit message length
+	displayMessage := message
+	if len(displayMessage) > 500 {
+		displayMessage = displayMessage[:500] + "... (显示截断)"
+	}
+	
 	// Send to TUI if available
 	if h.tuiApp != nil {
-		level := "INFO"
-		switch r.Level {
-		case slog.LevelDebug:
-			level = "DEBUG"
-		case slog.LevelWarn:
-			level = "WARN"
-		case slog.LevelError:
-			level = "ERROR"
-		}
-		h.tuiApp.AddLog(level, message, "system")
+		h.tuiApp.AddLog(level, displayMessage, "system")
 	} else {
 		// Only output to console when TUI is not available
-		fmt.Println(message)
+		fmt.Println(displayMessage)
 	}
 	
 	return nil
@@ -362,4 +417,13 @@ func (h *SimpleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
 func (h *SimpleHandler) WithGroup(name string) slog.Handler {
 	// Return the same handler since we don't use groups
 	return h
+}
+
+// Close gracefully closes the handler and syncs any buffered data
+func (h *SimpleHandler) Close() error {
+	if h.fileRotator != nil {
+		h.fileRotator.Sync()
+		return h.fileRotator.Close()
+	}
+	return nil
 }

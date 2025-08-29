@@ -281,8 +281,8 @@ func (v *EndpointsView) setupUI() {
 	v.detailBox.SetBorder(true).SetTitle(" 📊 Details ").SetTitleAlign(tview.AlignLeft)
 
 	v.container = tview.NewFlex().
-		AddItem(v.table, 0, 2, true).
-		AddItem(v.detailBox, 0, 1, false)
+		AddItem(v.table, 0, 3, true).
+		AddItem(v.detailBox, 0, 2, false)
 
 	// Setup headers
 	headers := []string{"Status", "Name", "URL", "Priority", "Response Time", "Requests"}
@@ -444,71 +444,88 @@ func (v *EndpointsView) updateDetails() {
 	var detailText strings.Builder
 	detailText.WriteString(fmt.Sprintf("[blue::b]🎯 %s[white::-]\n\n", endpoint.Config.Name))
 	
-	// Basic Info
-	detailText.WriteString("[yellow::b]Basic Information[white::-]\n")
-	detailText.WriteString(fmt.Sprintf("URL: [cyan]%s[white]\n", endpoint.Config.URL))
-	detailText.WriteString(fmt.Sprintf("Priority: [cyan]%d[white]\n", endpoint.Config.Priority))
-	detailText.WriteString(fmt.Sprintf("Timeout: [cyan]%v[white]\n", endpoint.Config.Timeout))
+	// Basic Info - Use smart URL truncation
+	detailText.WriteString("[yellow::b]📋 Basic Info[white::-]\n")
+	detailText.WriteString(fmt.Sprintf("URL: [cyan]%s[white]\n", smartTruncateURL(endpoint.Config.URL, 35)))
+	detailText.WriteString(fmt.Sprintf("Priority: [cyan]%d[white] | Timeout: [cyan]%v[white]\n", 
+		endpoint.Config.Priority, endpoint.Config.Timeout))
 	
-	// Health Status
-	detailText.WriteString("\n[yellow::b]Health Status[white::-]\n")
+	// Health Status - More compact format
+	detailText.WriteString("\n[yellow::b]❤️ Health[white::-]\n")
 	healthStatus := "[red]Unhealthy[white]"
 	healthIcon := "🔴"
 	if status.Healthy {
 		healthStatus = "[green]Healthy[white]"
 		healthIcon = "🟢"
 	}
-	detailText.WriteString(fmt.Sprintf("Status: %s %s\n", healthIcon, healthStatus))
-	detailText.WriteString(fmt.Sprintf("Response Time: [cyan]%dms[white]\n", status.ResponseTime.Milliseconds()))
+	detailText.WriteString(fmt.Sprintf("%s %s | [cyan]%dms[white] | Fails: [red]%d[white]\n", 
+		healthIcon, healthStatus, status.ResponseTime.Milliseconds(), status.ConsecutiveFails))
 	detailText.WriteString(fmt.Sprintf("Last Check: [cyan]%v[white]\n", status.LastCheck.Format("15:04:05")))
-	detailText.WriteString(fmt.Sprintf("Consecutive Fails: [red]%d[white]\n", status.ConsecutiveFails))
 	
-	// Performance Metrics
-	if endpointStats := metrics.EndpointStats[endpoint.Config.Name]; endpointStats != nil {
-		detailText.WriteString("\n[yellow::b]Performance Metrics[white::-]\n")
-		detailText.WriteString(fmt.Sprintf("Total Requests: [cyan]%d[white]\n", endpointStats.TotalRequests))
-		detailText.WriteString(fmt.Sprintf("Successful: [green]%d[white]\n", endpointStats.SuccessfulRequests))
-		detailText.WriteString(fmt.Sprintf("Failed: [red]%d[white]\n", endpointStats.FailedRequests))
-		detailText.WriteString(fmt.Sprintf("Retries: [yellow]%d[white]\n", endpointStats.RetryCount))
+	// Performance Metrics - Only show if there's data
+	if endpointStats := metrics.EndpointStats[endpoint.Config.Name]; endpointStats != nil && endpointStats.TotalRequests > 0 {
+		detailText.WriteString("\n[yellow::b]📊 Performance[white::-]\n")
 		
-		if endpointStats.TotalRequests > 0 {
-			avgResponseTime := endpointStats.TotalResponseTime / time.Duration(endpointStats.TotalRequests)
-			successRate := float64(endpointStats.SuccessfulRequests) / float64(endpointStats.TotalRequests) * 100
-			
-			detailText.WriteString(fmt.Sprintf("Success Rate: [cyan]%.1f%%[white]\n", successRate))
-			detailText.WriteString(fmt.Sprintf("Avg Response: [cyan]%s[white]\n", formatDurationShort(avgResponseTime)))
-			detailText.WriteString(fmt.Sprintf("Min Response: [cyan]%s[white]\n", formatDurationShort(endpointStats.MinResponseTime)))
-			detailText.WriteString(fmt.Sprintf("Max Response: [cyan]%s[white]\n", formatDurationShort(endpointStats.MaxResponseTime)))
-		}
+		// Compact metrics format
+		successRate := float64(endpointStats.SuccessfulRequests) / float64(endpointStats.TotalRequests) * 100
+		detailText.WriteString(fmt.Sprintf("Req: [cyan]%s[white] | Success: [green]%.1f%%[white] | Retries: [yellow]%s[white]\n",
+			formatLargeNumber(endpointStats.TotalRequests), successRate, formatLargeNumber(int64(endpointStats.RetryCount))))
 		
+		// Response time metrics
+		avgResponseTime := endpointStats.TotalResponseTime / time.Duration(endpointStats.TotalRequests)
+		detailText.WriteString(fmt.Sprintf("Avg: [cyan]%s[white] | Min: [cyan]%s[white] | Max: [cyan]%s[white]\n",
+			formatDurationShort(avgResponseTime),
+			formatDurationShort(endpointStats.MinResponseTime),
+			formatDurationShort(endpointStats.MaxResponseTime)))
+		
+		// Last used info
 		if !endpointStats.LastUsed.IsZero() {
 			detailText.WriteString(fmt.Sprintf("Last Used: [cyan]%v[white]\n", endpointStats.LastUsed.Format("15:04:05")))
 		}
 		
-		// Token Usage Metrics
-		if endpointStats.TokenUsage.InputTokens > 0 || endpointStats.TokenUsage.OutputTokens > 0 {
-			detailText.WriteString("\n[yellow::b]🪙 Token Usage[white::-]\n")
-			detailText.WriteString(fmt.Sprintf("📥 Input Tokens: [cyan]%d[white]\n", endpointStats.TokenUsage.InputTokens))
-			detailText.WriteString(fmt.Sprintf("📤 Output Tokens: [cyan]%d[white]\n", endpointStats.TokenUsage.OutputTokens))
-			detailText.WriteString(fmt.Sprintf("🆕 Cache Creation: [cyan]%d[white]\n", endpointStats.TokenUsage.CacheCreationTokens))
-			detailText.WriteString(fmt.Sprintf("📖 Cache Read: [cyan]%d[white]\n", endpointStats.TokenUsage.CacheReadTokens))
+		// Token Usage Metrics - Only show if there's significant token usage
+		hasTokens := endpointStats.TokenUsage.InputTokens > 0 || endpointStats.TokenUsage.OutputTokens > 0 || 
+					 endpointStats.TokenUsage.CacheCreationTokens > 0 || endpointStats.TokenUsage.CacheReadTokens > 0
+		if hasTokens {
+			detailText.WriteString("\n[yellow::b]🪙 Tokens[white::-]\n")
+			
+			// Compact token display
 			totalTokens := endpointStats.TokenUsage.InputTokens + endpointStats.TokenUsage.OutputTokens
-			detailText.WriteString(fmt.Sprintf("🔢 Total Tokens: [magenta]%d[white]\n", totalTokens))
+			totalCacheTokens := endpointStats.TokenUsage.CacheCreationTokens + endpointStats.TokenUsage.CacheReadTokens
+			
+			detailText.WriteString(fmt.Sprintf("📥 In: [cyan]%s[white] | 📤 Out: [cyan]%s[white] | 🔢 Total: [magenta]%s[white]\n",
+				formatLargeNumber(int64(endpointStats.TokenUsage.InputTokens)),
+				formatLargeNumber(int64(endpointStats.TokenUsage.OutputTokens)),
+				formatLargeNumber(int64(totalTokens))))
+			
+			// Show cache tokens only if they exist
+			if totalCacheTokens > 0 {
+				detailText.WriteString(fmt.Sprintf("🆕 Cache Create: [cyan]%s[white] | 📖 Cache Read: [cyan]%s[white]\n",
+					formatLargeNumber(int64(endpointStats.TokenUsage.CacheCreationTokens)),
+					formatLargeNumber(int64(endpointStats.TokenUsage.CacheReadTokens))))
+			}
 		}
 	} else {
-		detailText.WriteString("\n[yellow::b]Performance Metrics[white::-]\n")
+		detailText.WriteString("\n[yellow::b]📊 Performance[white::-]\n")
 		detailText.WriteString("[gray]No requests processed yet[white]\n")
 	}
 	
-	// Connection Info
-	detailText.WriteString("\n[yellow::b]Connection Details[white::-]\n")
+	// Active Connections - Only show if there are connections
 	activeConnections := 0
 	for _, conn := range metrics.ActiveConnections {
 		if conn.Endpoint == endpoint.Config.Name {
 			activeConnections++
 		}
 	}
-	detailText.WriteString(fmt.Sprintf("Active Connections: [cyan]%d[white]\n", activeConnections))
+	
+	if activeConnections > 0 {
+		detailText.WriteString(fmt.Sprintf("\n[yellow::b]🔌 Connections[white::-]\nActive: [cyan]%d[white]\n", activeConnections))
+	} else {
+		detailText.WriteString("\n[yellow::b]🔌 Connections[white::-]\n[gray]No active connections[white]\n")
+	}
+	
+	// Add scrolling hint
+	detailText.WriteString("\n[gray]↑↓ Arrow keys to scroll[white]")
 	
 	// Only update if content changed
 	newContent := detailText.String()
@@ -852,5 +869,89 @@ func formatUptimeShort(d time.Duration) string {
 		days := int(d.Hours() / 24)
 		hours := int(d.Hours()) % 24
 		return fmt.Sprintf("%dd%dh", days, hours)
+	}
+}
+
+// formatLargeNumber formats large numbers with K/M/B suffixes
+func formatLargeNumber(n int64) string {
+	if n < 1000 {
+		return fmt.Sprintf("%d", n)
+	} else if n < 1000000 {
+		if n%1000 == 0 {
+			return fmt.Sprintf("%dK", n/1000)
+		}
+		return fmt.Sprintf("%.1fK", float64(n)/1000)
+	} else if n < 1000000000 {
+		if n%1000000 == 0 {
+			return fmt.Sprintf("%dM", n/1000000)
+		}
+		return fmt.Sprintf("%.1fM", float64(n)/1000000)
+	} else {
+		return fmt.Sprintf("%.1fB", float64(n)/1000000000)
+	}
+}
+
+// smartTruncateURL truncates URL intelligently showing domain and key path parts
+func smartTruncateURL(url string, maxLen int) string {
+	if len(url) <= maxLen {
+		return url
+	}
+	
+	// Try to preserve protocol and domain
+	if len(url) > maxLen {
+		// Find the domain part
+		protocolEnd := strings.Index(url, "://")
+		if protocolEnd == -1 {
+			return truncateString(url, maxLen)
+		}
+		
+		domainStart := protocolEnd + 3
+		pathStart := strings.Index(url[domainStart:], "/")
+		if pathStart == -1 {
+			return truncateString(url, maxLen)
+		}
+		
+		domain := url[:domainStart+pathStart]
+		path := url[domainStart+pathStart:]
+		
+		// If domain itself is too long, just truncate normally
+		if len(domain) >= maxLen-3 {
+			return truncateString(url, maxLen)
+		}
+		
+		// Calculate remaining space for path
+		remaining := maxLen - len(domain) - 3 // 3 for "..."
+		if remaining <= 0 {
+			return domain + "..."
+		}
+		
+		// Show beginning of path
+		if len(path) <= remaining {
+			return url
+		}
+		
+		return domain + truncateString(path, remaining)
+	}
+	
+	return truncateString(url, maxLen)
+}
+
+// formatCompactMetrics formats metrics in a more compact way
+func formatCompactMetrics(label string, value interface{}) string {
+	switch v := value.(type) {
+	case int64:
+		return fmt.Sprintf("%-12s: [cyan]%8s[white]", label, formatLargeNumber(v))
+	case int:
+		return fmt.Sprintf("%-12s: [cyan]%8s[white]", label, formatLargeNumber(int64(v)))
+	case float64:
+		if v >= 100 {
+			return fmt.Sprintf("%-12s: [cyan]%8.0f[white]", label, v)
+		} else {
+			return fmt.Sprintf("%-12s: [cyan]%8.1f[white]", label, v)
+		}
+	case string:
+		return fmt.Sprintf("%-12s: [cyan]%8s[white]", label, v)
+	default:
+		return fmt.Sprintf("%-12s: [cyan]%8v[white]", label, v)
 	}
 }

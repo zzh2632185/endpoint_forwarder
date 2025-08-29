@@ -1,6 +1,8 @@
-# Claude Request Forwarder
+# Claude Code Request Forwarder
 
-A high-performance Go application that transparently forwards Claude API requests to multiple endpoints with intelligent routing, health checking, and automatic retry/fallback capabilities.
+A high-performance Go application that transparently forwards Claude Code API requests to multiple endpoints with intelligent routing, health checking, and automatic retry/fallback capabilities.
+
+[中文文档](README_CN.md) | English
 
 ## Features
 
@@ -39,12 +41,12 @@ A high-performance Go application that transparently forwards Claude API request
    ./endpoint_forwarder -config config/config.yaml --tui
    ```
 
-4. **Send requests to the forwarder**:
-   ```bash
-   curl -X POST http://localhost:8080/v1/messages \
-     -H "Content-Type: application/json" \
-     -H "x-api-key: your-api-key" \
-     -d '{"model": "claude-3-sonnet-20240229", "max_tokens": 1024, "messages": [{"role": "user", "content": "Hello!"}]}'
+4. **Configure Claude Code**:
+   Set in Claude Code's `settings.json`:
+   ```json
+   {
+     "ANTHROPIC_BASE_URL": "http://localhost:8080"
+   }
    ```
 
 ## Configuration
@@ -111,18 +113,14 @@ tui:
 - **Multi-tab Interface**: Overview, Endpoints, Connections, Logs, and Configuration tabs
 - **Interactive Navigation**: Tab/Shift+Tab to switch tabs, 1-5 for direct access
 - **Color-coded Status**: Green=Healthy, Yellow=Warning, Red=Error
-- **ASCII Charts**: Response time trends and performance visualization
 - **Live Connection Tracking**: Monitor active connections and traffic
-- **Real-time Logs**: System logs with filtering and search capabilities
+- **Real-time Logs**: Real-time System logs
 
 **TUI Controls:**
 - `Tab/Shift+Tab`: Navigate between tabs
 - `1-5`: Jump directly to tab (1=Overview, 2=Endpoints, etc.)
-- `F1`: Show help
 - `Ctrl+C`: Quit application
 - `Arrow Keys`: Navigate within views
-- `P`: Pause/Resume (in Logs view)
-- `C`: Clear logs (in Logs view)
 
 **Usage:**
 - When `enabled: false` (default): No authentication is required, requests pass through directly
@@ -137,7 +135,6 @@ tui:
   - 2xx responses indicate the endpoint is working correctly
   - 4xx responses (401, 403, etc.) indicate the endpoint is reachable but may need proper authentication
 - **Failure Criteria**: 5xx server errors indicate endpoint problems
-- **Resilience**: Requires 2 consecutive failures before marking an endpoint as unhealthy
 - **Strategy Logging**: For "fastest" strategy, logs endpoint latencies before each selection
 
 ### Endpoint Configuration

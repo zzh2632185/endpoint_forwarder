@@ -375,10 +375,10 @@ func (h *Handler) streamResponseByBytes(ctx context.Context, w http.ResponseWrit
 						accumulatedContent := accumulatedEvents.String()
 						if eventCounter%10 == 0 || len(accumulatedContent) > 500 {
 							debugContent := accumulatedContent
-							if len(debugContent) > 200 {
-								debugContent = debugContent[:200]
+							if len(debugContent) > 500 {
+								debugContent = debugContent[:500]
 							}
-							slog.InfoContext(ctx, fmt.Sprintf("🐛 [调试SSE] 端点: %s, 事件数: %d, 总长度: %d字节, 累积SSE事件前200字符: %s", 
+							slog.InfoContext(ctx, fmt.Sprintf("🐛 [调试SSE] 端点: %s, 事件数: %d, 总长度: %d字节, 累积SSE事件前500字符: %s", 
 								endpointName, eventCounter, len(accumulatedContent), debugContent))
 							
 							// Reset accumulator if it gets too large
@@ -388,7 +388,7 @@ func (h *Handler) streamResponseByBytes(ctx context.Context, w http.ResponseWrit
 						}
 						
 						// Always try to parse each line, with detailed logging
-						slog.Debug("🔍 [Stream Parser] Processing line", "line", line, "lineLength", len(line))
+						slog.Debug(fmt.Sprintf("🔍 [Stream Parser] Processing line - line: %s, lineLength: %d", line, len(line)))
 						if tokenUsage := tokenParser.ParseSSELine(line); tokenUsage != nil {
 							// Record token usage if we have monitoring middleware
 							if mm, ok := h.retryHandler.monitoringMiddleware.(interface{
@@ -398,7 +398,7 @@ func (h *Handler) streamResponseByBytes(ctx context.Context, w http.ResponseWrit
 								slog.InfoContext(ctx, fmt.Sprintf("✅ [令牌统计] 记录令牌使用 - 端点: %s, 输入: %d, 输出: %d, 缓存创建: %d, 缓存读取: %d",
 									endpointName, tokenUsage.InputTokens, tokenUsage.OutputTokens, tokenUsage.CacheCreationTokens, tokenUsage.CacheReadTokens))
 							} else {
-								slog.Debug("⚠️ [Token Parser] Monitoring middleware not available or no connID", "connID", connID, "hasMiddleware", h.retryHandler.monitoringMiddleware != nil)
+								slog.Debug(fmt.Sprintf("⚠️ [Token Parser] Monitoring middleware not available or no connID - connID: %s, hasMiddleware: %t", connID, h.retryHandler.monitoringMiddleware != nil))
 							}
 						}
 						
@@ -437,7 +437,7 @@ func (h *Handler) streamResponseByBytes(ctx context.Context, w http.ResponseWrit
 					if len(lineBuffer) > 0 {
 						// Try to parse the final line for tokens
 						line := string(lineBuffer)
-						slog.Debug("🔍 [Stream Parser] Processing final line", "line", line, "lineLength", len(line))
+						slog.Debug(fmt.Sprintf("🔍 [Stream Parser] Processing final line - line: %s, lineLength: %d", line, len(line)))
 						
 						// Add final line to accumulated events and log final summary
 						eventCounter++

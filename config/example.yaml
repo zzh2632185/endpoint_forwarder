@@ -31,6 +31,14 @@ health:
 logging:
   level: "info"          # 日志级别: debug, info, warn, error，默认: info
   format: "json"         # 日志格式: "json" 或 "text"，默认: text
+  
+  # 文件日志配置 (可选)
+  file_enabled: false            # 是否启用文件日志，默认: false
+  file_path: "logs/app.log"      # 日志文件路径，默认: logs/app.log
+  max_file_size: "100MB"         # 单个日志文件最大大小，支持: KB, MB, GB，默认: 100MB
+  max_files: 10                  # 最多保留的轮转文件数量，默认: 10
+  compress_rotated: true         # 是否压缩轮转的旧日志文件，默认: false
+  disable_response_limit: true   # 启用文件日志时是否取消响应内容输出限制，默认: false
 
 # 流式传输配置
 streaming:
