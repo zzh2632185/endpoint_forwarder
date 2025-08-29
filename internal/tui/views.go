@@ -249,6 +249,7 @@ type EndpointsView struct {
 	detailBox           *tview.TextView
 	monitoringMiddleware *middleware.MonitoringMiddleware
 	endpointManager     *endpoint.Manager
+	tuiApp              *TUIApp  // Reference to main TUI app for edit mode
 	selectedRow         int
 	lastDetailHash      string // Track detail content changes
 }
@@ -264,7 +265,9 @@ func NewEndpointsView(monitoringMiddleware *middleware.MonitoringMiddleware, end
 
 func (v *EndpointsView) setupUI() {
 	v.table = tview.NewTable().SetBorders(true).SetSelectable(true, false)
-	v.table.SetBorder(true).SetTitle(" 🎯 Endpoints ").SetTitleAlign(tview.AlignLeft)
+	
+	// Update table title based on edit mode
+	v.updateTableTitle()
 	
 	// Set up table selection change handler (auto-update on row change)
 	v.table.SetSelectionChangedFunc(func(row, column int) {
@@ -288,11 +291,34 @@ func (v *EndpointsView) setupUI() {
 	}
 }
 
+// updateTableTitle updates the table title based on current mode
+func (v *EndpointsView) updateTableTitle() {
+	var title string
+	if v.tuiApp != nil && v.tuiApp.IsInEditMode() {
+		isDirty := ""
+		if v.tuiApp.HasUnsavedChanges() {
+			isDirty = " *"
+		}
+		title = fmt.Sprintf(" 🎯 Endpoints [编辑模式%s - ESC退出 Ctrl+S保存] ", isDirty)
+	} else {
+		title = " 🎯 Endpoints [Enter编辑 数字键选择优先级] "
+	}
+	v.table.SetBorder(true).SetTitle(title).SetTitleAlign(tview.AlignLeft)
+}
+
 func (v *EndpointsView) GetPrimitive() tview.Primitive {
 	return v.container
 }
 
+// SetTUIApp sets the TUIApp reference for edit mode functionality
+func (v *EndpointsView) SetTUIApp(app *TUIApp) {
+	v.tuiApp = app
+}
+
 func (v *EndpointsView) Update() {
+	// Update table title first
+	v.updateTableTitle()
+	
 	v.updateTable()
 	// Update details for currently selected row
 	if v.selectedRow > 0 {
@@ -342,6 +368,36 @@ func (v *EndpointsView) updateTable() {
 			totalReqs = endpointStats.TotalRequests
 		}
 		
+		// Get effective priority (temp or config)
+		effectivePriority := ep.Config.Priority
+		if v.tuiApp != nil {
+			effectivePriority = v.tuiApp.GetEffectivePriority(ep.Config.Name)
+		}
+		
+		// Find if this is the highest priority endpoint
+		isHighestPriority := false
+		if v.tuiApp != nil {
+			minPriority := 999
+			for _, endpoint := range endpoints {
+				priority := v.tuiApp.GetEffectivePriority(endpoint.Config.Name)
+				if priority < minPriority {
+					minPriority = priority
+				}
+			}
+			isHighestPriority = effectivePriority == minPriority
+		}
+		
+		// Add edit mode indicator and highlighting
+		priorityText := fmt.Sprintf("%d", effectivePriority)
+		if v.tuiApp != nil && v.tuiApp.IsInEditMode() {
+			priorityText += " [编辑]"
+			if isHighestPriority {
+				priorityText = fmt.Sprintf("[red::b]%d [编辑][white::-]", effectivePriority)  // Highlight highest priority
+			}
+		} else if isHighestPriority {
+			priorityText = fmt.Sprintf("[green::b]%d[white::-]", effectivePriority)  // Highlight highest priority in normal mode
+		}
+		
 		// Safely update cells
 		if row < v.table.GetRowCount() {
 			if cell := v.table.GetCell(row, 0); cell != nil {
@@ -354,7 +410,7 @@ func (v *EndpointsView) updateTable() {
 				cell.SetText(truncateString(ep.Config.URL, 25))
 			}
 			if cell := v.table.GetCell(row, 3); cell != nil {
-				cell.SetText(fmt.Sprintf("%d", ep.Config.Priority))
+				cell.SetText(priorityText)
 			}
 			if cell := v.table.GetCell(row, 4); cell != nil {
 				cell.SetText(fmt.Sprintf("%dms", status.ResponseTime.Milliseconds()))
