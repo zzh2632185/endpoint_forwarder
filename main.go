@@ -16,24 +16,25 @@ import (
 	"endpoint_forwarder/internal/logging"
 	"endpoint_forwarder/internal/middleware"
 	"endpoint_forwarder/internal/proxy"
-	"endpoint_forwarder/internal/tui"
 	"endpoint_forwarder/internal/transport"
+	"endpoint_forwarder/internal/tui"
+	"endpoint_forwarder/internal/webui"
 )
 
 var (
-	configPath = flag.String("config", "config/example.yaml", "Path to configuration file")
-	showVersion = flag.Bool("version", false, "Show version information")
-	enableTUI = flag.Bool("tui", true, "Enable TUI interface (default: true)")
-	disableTUI = flag.Bool("no-tui", false, "Disable TUI interface")
+	configPath      = flag.String("config", "config/example.yaml", "Path to configuration file")
+	showVersion     = flag.Bool("version", false, "Show version information")
+	enableTUI       = flag.Bool("tui", true, "Enable TUI interface (default: true)")
+	disableTUI      = flag.Bool("no-tui", false, "Disable TUI interface")
 	primaryEndpoint = flag.String("p", "", "Set primary endpoint with highest priority (endpoint name)")
-	
+
 	// Build-time variables (set via ldflags)
 	version = "dev"
 	commit  = "unknown"
 	date    = "unknown"
-	
+
 	// Runtime variables
-	startTime = time.Now()
+	startTime         = time.Now()
 	currentLogHandler *SimpleHandler // Track current log handler for cleanup
 )
 
@@ -80,7 +81,7 @@ func main() {
 	if cfg.TUI.UpdateInterval == 0 {
 		cfg.TUI.UpdateInterval = 1 * time.Second // Default
 	}
-	
+
 	// Command line flags override config file
 	if *disableTUI {
 		tuiEnabled = false
@@ -137,32 +138,33 @@ func main() {
 	loggingMiddleware := middleware.NewLoggingMiddleware(logger)
 	monitoringMiddleware := middleware.NewMonitoringMiddleware(endpointManager)
 	authMiddleware := middleware.NewAuthMiddleware(cfg.Auth)
-	
+
 	// Connect logging and monitoring middlewares
 	loggingMiddleware.SetMonitoringMiddleware(monitoringMiddleware)
 	proxyHandler.SetMonitoringMiddleware(monitoringMiddleware)
 
-	// Store tuiApp reference for configuration reloads
+	// Store tuiApp and webUIServer references for configuration reloads
 	var tuiApp *tui.TUIApp
+	var webUIServer *webui.WebUIServer
 
 	// Setup configuration reload callback to update components
 	configWatcher.AddReloadCallback(func(newCfg *config.Config) {
 		// Update logger (pass current tuiApp)
 		newLogger := setupLogger(newCfg.Logging, tuiApp)
 		slog.SetDefault(newLogger)
-		
+
 		// Update config watcher's logger too
 		configWatcher.UpdateLogger(newLogger)
-		
+
 		// Update endpoint manager
 		endpointManager.UpdateConfig(newCfg)
-		
+
 		// Update proxy handler
 		proxyHandler.UpdateConfig(newCfg)
-		
+
 		// Update auth middleware
 		authMiddleware.UpdateConfig(newCfg.Auth)
-		
+
 		if !tuiEnabled {
 			newLogger.Info("🔄 所有组件已更新为新配置")
 		}
@@ -202,10 +204,10 @@ func main() {
 			serverErr <- err
 		}
 	}()
-	
+
 	// Give server a moment to start
 	time.Sleep(100 * time.Millisecond)
-	
+
 	// Check if server started successfully
 	select {
 	case err := <-serverErr:
@@ -214,13 +216,13 @@ func main() {
 	default:
 		// Server started successfully
 		baseURL := fmt.Sprintf("http://%s:%d", cfg.Server.Host, cfg.Server.Port)
-		
+
 		if !tuiEnabled {
 			logger.Info("✅ 服务器启动成功！")
 			logger.Info("📋 配置说明：请在 Claude Code 的 settings.json 中设置")
 			logger.Info("🔧 ANTHROPIC_BASE_URL: " + baseURL)
 			logger.Info("📡 服务器地址: " + baseURL)
-			
+
 			// Security warning for non-localhost addresses
 			if cfg.Server.Host != "127.0.0.1" && cfg.Server.Host != "localhost" && cfg.Server.Host != "::1" {
 				if !cfg.Auth.Enabled {
@@ -234,23 +236,31 @@ func main() {
 		}
 	}
 
+	// Start WebUI if enabled
+	if cfg.WebUI.Enabled {
+		webUIServer = webui.NewWebUIServer(cfg, endpointManager, monitoringMiddleware, startTime, logger)
+		if err := webUIServer.Start(); err != nil {
+			logger.Error("❌ WebUI服务器启动失败", "error", err)
+		}
+	}
+
 	// Start TUI if enabled
 	if tuiEnabled {
 		tuiApp = tui.NewTUIApp(cfg, endpointManager, monitoringMiddleware, startTime)
-		
+
 		// Update logger to send logs to TUI as well
 		logger = setupLogger(cfg.Logging, tuiApp)
 		slog.SetDefault(logger)
-		
+
 		// Update config watcher's logger to use TUI-enabled logger
 		configWatcher.UpdateLogger(logger)
-		
+
 		// Run TUI in a goroutine
 		tuiErr := make(chan error, 1)
 		go func() {
 			tuiErr <- tuiApp.Run()
 		}()
-		
+
 		// Wait for TUI to exit or server error
 		select {
 		case err := <-serverErr:
@@ -284,12 +294,19 @@ func main() {
 	if !tuiEnabled {
 		logger.Info("🛑 正在关闭服务器...")
 	}
-	
+
+	// Close WebUI server if running
+	if webUIServer != nil && webUIServer.IsRunning() {
+		if err := webUIServer.Stop(); err != nil {
+			logger.Error("❌ WebUI服务器关闭失败", "error", err)
+		}
+	}
+
 	// Close log file handler before shutdown
 	if currentLogHandler != nil {
 		currentLogHandler.Close()
 	}
-	
+
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -327,7 +344,7 @@ func setupLogger(cfg config.LoggingConfig, tuiApp *tui.TUIApp) *slog.Logger {
 			fmt.Printf("警告：无法解析日志文件大小配置 '%s'，使用默认值 100MB: %v\n", cfg.MaxFileSize, err)
 			maxSize = 100 * 1024 * 1024 // 100MB
 		}
-		
+
 		fileRotator, err = logging.NewFileRotator(cfg.FilePath, maxSize, cfg.MaxFiles, cfg.CompressRotated)
 		if err != nil {
 			fmt.Printf("警告：无法创建日志文件轮转器: %v\n", err)
@@ -338,13 +355,13 @@ func setupLogger(cfg config.LoggingConfig, tuiApp *tui.TUIApp) *slog.Logger {
 	var handler slog.Handler
 	// Create a custom handler that only outputs the message
 	handler = &SimpleHandler{
-		level: level, 
-		tuiApp: tuiApp, 
-		fileRotator: fileRotator,
+		level:                    level,
+		tuiApp:                   tuiApp,
+		fileRotator:              fileRotator,
 		disableFileResponseLimit: cfg.FileEnabled && cfg.DisableResponseLimit,
 	}
 	currentLogHandler = handler.(*SimpleHandler) // Store reference for cleanup
-	
+
 	// Debug: print file logging configuration
 	if cfg.FileEnabled {
 		fmt.Printf("🔧 文件日志已启用: 路径=%s, 禁用响应限制=%v\n", cfg.FilePath, cfg.DisableResponseLimit)
@@ -355,9 +372,9 @@ func setupLogger(cfg config.LoggingConfig, tuiApp *tui.TUIApp) *slog.Logger {
 
 // SimpleHandler only outputs the log message without any metadata
 type SimpleHandler struct {
-	level slog.Level
-	tuiApp *tui.TUIApp
-	fileRotator *logging.FileRotator
+	level                    slog.Level
+	tuiApp                   *tui.TUIApp
+	fileRotator              *logging.FileRotator
 	disableFileResponseLimit bool // Whether to disable response limit for file output
 }
 
@@ -367,7 +384,7 @@ func (h *SimpleHandler) Enabled(_ context.Context, level slog.Level) bool {
 
 func (h *SimpleHandler) Handle(_ context.Context, r slog.Record) error {
 	message := r.Message
-	
+
 	// Format log message with timestamp for file output
 	timestamp := time.Now().Format("2006-01-02 15:04:05")
 	level := "INFO"
@@ -379,7 +396,7 @@ func (h *SimpleHandler) Handle(_ context.Context, r slog.Record) error {
 	case slog.LevelError:
 		level = "ERROR"
 	}
-	
+
 	// For file output - use full message if response limit is disabled
 	if h.fileRotator != nil {
 		fileMessage := message
@@ -391,21 +408,21 @@ func (h *SimpleHandler) Handle(_ context.Context, r slog.Record) error {
 		formattedMessage := fmt.Sprintf("[%s] [%s] %s\n", timestamp, level, fileMessage)
 		h.fileRotator.Write([]byte(formattedMessage))
 	}
-	
+
 	// For UI/console output - always limit message length
 	displayMessage := message
 	if len(displayMessage) > 500 {
 		displayMessage = displayMessage[:500] + "... (显示截断)"
 	}
-	
+
 	// Send to TUI if available
 	if h.tuiApp != nil {
 		h.tuiApp.AddLog(level, displayMessage, "system")
 	} else {
-		// Only output to console when TUI is not available
-		fmt.Println(displayMessage)
+		// Only output to console when TUI is not available - include timestamp and level
+		fmt.Printf("[%s] [%s] %s\n", timestamp, level, displayMessage)
 	}
-	
+
 	return nil
 }
 

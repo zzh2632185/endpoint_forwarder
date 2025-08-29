@@ -12,18 +12,19 @@ import (
 )
 
 type Config struct {
-	Server       ServerConfig     `yaml:"server"`
-	Strategy     StrategyConfig   `yaml:"strategy"`
-	Retry        RetryConfig      `yaml:"retry"`
-	Health       HealthConfig     `yaml:"health"`
-	Logging      LoggingConfig    `yaml:"logging"`
-	Streaming    StreamingConfig  `yaml:"streaming"`
-	Proxy        ProxyConfig      `yaml:"proxy"`
-	Auth         AuthConfig       `yaml:"auth"`
-	TUI          TUIConfig        `yaml:"tui"`           // TUI configuration
-	GlobalTimeout time.Duration   `yaml:"global_timeout"` // Global timeout for non-streaming requests
-	Endpoints    []EndpointConfig `yaml:"endpoints"`
-	
+	Server        ServerConfig     `yaml:"server"`
+	Strategy      StrategyConfig   `yaml:"strategy"`
+	Retry         RetryConfig      `yaml:"retry"`
+	Health        HealthConfig     `yaml:"health"`
+	Logging       LoggingConfig    `yaml:"logging"`
+	Streaming     StreamingConfig  `yaml:"streaming"`
+	Proxy         ProxyConfig      `yaml:"proxy"`
+	Auth          AuthConfig       `yaml:"auth"`
+	TUI           TUIConfig        `yaml:"tui"`            // TUI configuration
+	WebUI         WebUIConfig      `yaml:"webui"`          // WebUI configuration
+	GlobalTimeout time.Duration    `yaml:"global_timeout"` // Global timeout for non-streaming requests
+	Endpoints     []EndpointConfig `yaml:"endpoints"`
+
 	// Runtime priority override (not serialized to YAML)
 	PrimaryEndpoint string `yaml:"-"` // Primary endpoint name from command line
 }
@@ -34,11 +35,11 @@ type ServerConfig struct {
 }
 
 type StrategyConfig struct {
-	Type              string        `yaml:"type"` // "priority" or "fastest"
-	FastTestEnabled   bool          `yaml:"fast_test_enabled"`   // Enable pre-request fast testing
-	FastTestCacheTTL  time.Duration `yaml:"fast_test_cache_ttl"` // Cache TTL for fast test results
-	FastTestTimeout   time.Duration `yaml:"fast_test_timeout"`   // Timeout for individual fast tests
-	FastTestPath      string        `yaml:"fast_test_path"`      // Path for fast testing (default: health path)
+	Type             string        `yaml:"type"`                // "priority" or "fastest"
+	FastTestEnabled  bool          `yaml:"fast_test_enabled"`   // Enable pre-request fast testing
+	FastTestCacheTTL time.Duration `yaml:"fast_test_cache_ttl"` // Cache TTL for fast test results
+	FastTestTimeout  time.Duration `yaml:"fast_test_timeout"`   // Timeout for individual fast tests
+	FastTestPath     string        `yaml:"fast_test_path"`      // Path for fast testing (default: health path)
 }
 
 type RetryConfig struct {
@@ -55,14 +56,14 @@ type HealthConfig struct {
 }
 
 type LoggingConfig struct {
-	Level              string `yaml:"level"`
-	Format             string `yaml:"format"`               // "json" or "text"
-	FileEnabled        bool   `yaml:"file_enabled"`         // Enable file logging
-	FilePath           string `yaml:"file_path"`            // Log file path
-	MaxFileSize        string `yaml:"max_file_size"`        // Max file size (e.g., "100MB")
-	MaxFiles           int    `yaml:"max_files"`            // Max number of rotated files to keep
-	CompressRotated    bool   `yaml:"compress_rotated"`     // Compress rotated log files
-	DisableResponseLimit bool `yaml:"disable_response_limit"` // Disable response content output limit when file logging is enabled
+	Level                string `yaml:"level"`
+	Format               string `yaml:"format"`                 // "json" or "text"
+	FileEnabled          bool   `yaml:"file_enabled"`           // Enable file logging
+	FilePath             string `yaml:"file_path"`              // Log file path
+	MaxFileSize          string `yaml:"max_file_size"`          // Max file size (e.g., "100MB")
+	MaxFiles             int    `yaml:"max_files"`              // Max number of rotated files to keep
+	CompressRotated      bool   `yaml:"compress_rotated"`       // Compress rotated log files
+	DisableResponseLimit bool   `yaml:"disable_response_limit"` // Disable response content output limit when file logging is enabled
 }
 
 type StreamingConfig struct {
@@ -82,13 +83,19 @@ type ProxyConfig struct {
 }
 
 type AuthConfig struct {
-	Enabled bool   `yaml:"enabled"`                   // Enable authentication, default: false
-	Token   string `yaml:"token,omitempty"`           // Bearer token for authentication
+	Enabled bool   `yaml:"enabled"`         // Enable authentication, default: false
+	Token   string `yaml:"token,omitempty"` // Bearer token for authentication
 }
 
 type TUIConfig struct {
-	Enabled       bool          `yaml:"enabled"`        // Enable TUI interface, default: true
+	Enabled        bool          `yaml:"enabled"`         // Enable TUI interface, default: true
 	UpdateInterval time.Duration `yaml:"update_interval"` // TUI refresh interval, default: 1s
+}
+
+type WebUIConfig struct {
+	Enabled bool   `yaml:"enabled"` // Enable WebUI interface, default: false
+	Host    string `yaml:"host"`    // WebUI host, default: "127.0.0.1"
+	Port    int    `yaml:"port"`    // WebUI port, default: 8003
 }
 
 type EndpointConfig struct {
@@ -203,6 +210,15 @@ func (c *Config) setDefaults() {
 	// TUI enabled defaults to true if not explicitly set in YAML
 	// This will be handled by the application logic
 
+	// Set WebUI defaults
+	if c.WebUI.Host == "" {
+		c.WebUI.Host = "127.0.0.1"
+	}
+	if c.WebUI.Port == 0 {
+		c.WebUI.Port = 8003
+	}
+	// WebUI enabled defaults to false if not explicitly set in YAML
+
 	// Set default timeouts for endpoints and handle parameter inheritance
 	var defaultEndpoint *EndpointConfig
 	if len(c.Endpoints) > 0 {
@@ -220,12 +236,12 @@ func (c *Config) setDefaults() {
 				c.Endpoints[i].Timeout = c.GlobalTimeout
 			}
 		}
-		
+
 		// Inherit token from first endpoint if not specified
 		if c.Endpoints[i].Token == "" && defaultEndpoint != nil && defaultEndpoint.Token != "" {
 			c.Endpoints[i].Token = defaultEndpoint.Token
 		}
-		
+
 		// Inherit headers from first endpoint if not specified
 		if len(c.Endpoints[i].Headers) == 0 && defaultEndpoint != nil && len(defaultEndpoint.Headers) > 0 {
 			// Copy headers from first endpoint
@@ -236,17 +252,17 @@ func (c *Config) setDefaults() {
 		} else if len(c.Endpoints[i].Headers) > 0 && defaultEndpoint != nil && len(defaultEndpoint.Headers) > 0 {
 			// Merge headers: inherit from first endpoint, but allow override
 			mergedHeaders := make(map[string]string)
-			
+
 			// First, copy all headers from the first endpoint
 			for key, value := range defaultEndpoint.Headers {
 				mergedHeaders[key] = value
 			}
-			
+
 			// Then, override with endpoint-specific headers
 			for key, value := range c.Endpoints[i].Headers {
 				mergedHeaders[key] = value
 			}
-			
+
 			c.Endpoints[i].Headers = mergedHeaders
 		}
 	}
@@ -258,7 +274,7 @@ func (c *Config) ApplyPrimaryEndpoint(logger *slog.Logger) error {
 	if c.PrimaryEndpoint == "" {
 		return nil
 	}
-	
+
 	// Find the specified endpoint
 	primaryIndex := c.findEndpointIndex(c.PrimaryEndpoint)
 	if primaryIndex == -1 {
@@ -267,21 +283,21 @@ func (c *Config) ApplyPrimaryEndpoint(logger *slog.Logger) error {
 		for _, endpoint := range c.Endpoints {
 			availableEndpoints = append(availableEndpoints, endpoint.Name)
 		}
-		
+
 		err := fmt.Errorf("指定的主端点 '%s' 未找到，可用端点: %v", c.PrimaryEndpoint, availableEndpoints)
 		if logger != nil {
-			logger.Error(fmt.Sprintf("❌ 主端点设置失败 - 端点: %s, 可用端点: %v", 
+			logger.Error(fmt.Sprintf("❌ 主端点设置失败 - 端点: %s, 可用端点: %v",
 				c.PrimaryEndpoint, availableEndpoints))
 		}
 		return err
 	}
-	
+
 	// Store original priority for logging
 	originalPriority := c.Endpoints[primaryIndex].Priority
-	
+
 	// Set the primary endpoint to priority 1
 	c.Endpoints[primaryIndex].Priority = 1
-	
+
 	// Adjust other endpoints' priorities to ensure they are lower than primary
 	adjustedCount := 0
 	for i := range c.Endpoints {
@@ -290,12 +306,12 @@ func (c *Config) ApplyPrimaryEndpoint(logger *slog.Logger) error {
 			adjustedCount++
 		}
 	}
-	
+
 	if logger != nil {
 		logger.Info(fmt.Sprintf("✅ 主端点优先级设置成功 - 端点: %s, 原优先级: %d → 新优先级: %d, 调整了%d个其他端点",
 			c.PrimaryEndpoint, originalPriority, 1, adjustedCount))
 	}
-	
+
 	return nil
 }
 
@@ -445,7 +461,7 @@ func (cw *ConfigWatcher) watchLoop() {
 				}
 
 				cw.lastModTime = fileInfo.ModTime()
-				
+
 				// Cancel any existing debounce timer
 				if cw.debounceTimer != nil {
 					cw.debounceTimer.Stop()
