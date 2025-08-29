@@ -23,6 +23,9 @@ type Config struct {
 	TUI          TUIConfig        `yaml:"tui"`           // TUI configuration
 	GlobalTimeout time.Duration   `yaml:"global_timeout"` // Global timeout for non-streaming requests
 	Endpoints    []EndpointConfig `yaml:"endpoints"`
+	
+	// Runtime priority override (not serialized to YAML)
+	PrimaryEndpoint string `yaml:"-"` // Primary endpoint name from command line
 }
 
 type ServerConfig struct {
@@ -229,6 +232,36 @@ func (c *Config) setDefaults() {
 			}
 			
 			c.Endpoints[i].Headers = mergedHeaders
+		}
+	}
+}
+
+// ApplyPrimaryEndpoint applies primary endpoint override from command line
+func (c *Config) ApplyPrimaryEndpoint() {
+	if c.PrimaryEndpoint == "" {
+		return
+	}
+	
+	// Find the specified endpoint
+	var primaryIndex = -1
+	for i, endpoint := range c.Endpoints {
+		if endpoint.Name == c.PrimaryEndpoint {
+			primaryIndex = i
+			break
+		}
+	}
+	
+	if primaryIndex == -1 {
+		return // Endpoint not found, ignore silently
+	}
+	
+	// Set the primary endpoint to priority 1 and adjust others
+	c.Endpoints[primaryIndex].Priority = 1
+	
+	// Adjust other endpoints' priorities to be higher than 1
+	for i := range c.Endpoints {
+		if i != primaryIndex && c.Endpoints[i].Priority <= 1 {
+			c.Endpoints[i].Priority = c.Endpoints[i].Priority + 10 // Push other endpoints down
 		}
 	}
 }
