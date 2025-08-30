@@ -61,11 +61,12 @@ server:
 ### 路由策略
 ```yaml
 strategy:
-  type: "priority"  # "priority" 或 "fastest"
+  type: "priority"  # "priority"、"fastest" 或 "round-robin"
 ```
 
 - **priority**: 按优先级顺序使用端点（数字越小优先级越高）
 - **fastest**: 使用响应时间最短的端点
+- **round-robin**: 轮询使用所有健康端点，实现负载均衡
 
 ### 重试配置
 ```yaml

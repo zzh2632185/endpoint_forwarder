@@ -8,10 +8,10 @@ server:
 
 # 路由策略配置
 strategy:
-  type: "fastest"                  # 路由策略: "priority" (优先级) 或 "fastest" (最快响应)
+  type: "fastest"              # 路由策略: "priority" (优先级)、"fastest" (最快响应) 或 "round-robin" (轮询)
   fast_test_enabled: true          # 启用快速测试 (仅在 fastest 策略下生效)
   fast_test_cache_ttl: "30s"       # 快速测试结果缓存时间，默认: 3s
-  fast_test_timeout: "5s"          # 快速测试超时时间，默认: 1s  
+  fast_test_timeout: "5s"          # 快速测试超时时间，默认: 1s
   fast_test_path: "/v1/models"     # 快速测试路径，默认使用健康检查路径
 
 # 重试配置

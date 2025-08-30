@@ -46,7 +46,7 @@ Thumbs.db
 
 # But include yaml files in config directory except config.yaml
 !config/*.yaml
-config/config.yaml
+config/*config*.yaml
 
 # Test files
 *_test_example.go

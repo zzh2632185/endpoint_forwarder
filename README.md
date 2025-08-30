@@ -61,11 +61,12 @@ server:
 ### Routing Strategy
 ```yaml
 strategy:
-  type: "priority"  # "priority" or "fastest"
+  type: "priority"  # "priority", "fastest", or "round-robin"
 ```
 
 - **priority**: Use endpoints in priority order (lower number = higher priority)
 - **fastest**: Use endpoint with lowest response time
+- **round-robin**: Rotate through all healthy endpoints for load balancing
 
 ### Retry Configuration
 ```yaml

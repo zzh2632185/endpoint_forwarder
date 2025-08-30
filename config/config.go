@@ -331,8 +331,8 @@ func (c *Config) validate() error {
 		return fmt.Errorf("at least one endpoint must be configured")
 	}
 
-	if c.Strategy.Type != "priority" && c.Strategy.Type != "fastest" {
-		return fmt.Errorf("strategy type must be 'priority' or 'fastest'")
+	if c.Strategy.Type != "priority" && c.Strategy.Type != "fastest" && c.Strategy.Type != "round-robin" {
+		return fmt.Errorf("strategy type must be 'priority', 'fastest', or 'round-robin'")
 	}
 
 	// Validate proxy configuration
