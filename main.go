@@ -54,7 +54,7 @@ func main() {
 	tuiEnabled := *enableTUI && !*disableTUI
 
 	// Setup initial logger (will be updated when config is loaded)
-	logger := setupLogger(config.LoggingConfig{Level: "info", Format: "text"}, nil)
+	logger := setupLogger(config.LoggingConfig{Level: "info", Format: "text"}, nil, nil)
 	slog.SetDefault(logger)
 
 	// Create configuration watcher
@@ -91,7 +91,7 @@ func main() {
 	}
 
 	// Update logger with config settings (TUI will be added later)
-	logger = setupLogger(cfg.Logging, nil)
+	logger = setupLogger(cfg.Logging, nil, nil)
 	slog.SetDefault(logger)
 
 	if tuiEnabled {
@@ -149,8 +149,8 @@ func main() {
 
 	// Setup configuration reload callback to update components
 	configWatcher.AddReloadCallback(func(newCfg *config.Config) {
-		// Update logger (pass current tuiApp)
-		newLogger := setupLogger(newCfg.Logging, tuiApp)
+		// Update logger (pass current tuiApp and webUIServer)
+		newLogger := setupLogger(newCfg.Logging, tuiApp, webUIServer)
 		slog.SetDefault(newLogger)
 
 		// Update config watcher's logger too
@@ -241,6 +241,10 @@ func main() {
 		webUIServer = webui.NewWebUIServer(cfg, endpointManager, monitoringMiddleware, startTime, logger)
 		if err := webUIServer.Start(); err != nil {
 			logger.Error("❌ WebUI服务器启动失败", "error", err)
+		} else {
+			// Update logger to include WebUI after WebUI server is initialized
+			logger = setupLogger(cfg.Logging, tuiApp, webUIServer)
+			slog.SetDefault(logger)
 		}
 	}
 
@@ -249,7 +253,7 @@ func main() {
 		tuiApp = tui.NewTUIApp(cfg, endpointManager, monitoringMiddleware, startTime)
 
 		// Update logger to send logs to TUI as well
-		logger = setupLogger(cfg.Logging, tuiApp)
+		logger = setupLogger(cfg.Logging, tuiApp, webUIServer)
 		slog.SetDefault(logger)
 
 		// Update config watcher's logger to use TUI-enabled logger
@@ -321,7 +325,7 @@ func main() {
 }
 
 // setupLogger configures the structured logger
-func setupLogger(cfg config.LoggingConfig, tuiApp *tui.TUIApp) *slog.Logger {
+func setupLogger(cfg config.LoggingConfig, tuiApp *tui.TUIApp, webUIServer *webui.WebUIServer) *slog.Logger {
 	var level slog.Level
 	switch cfg.Level {
 	case "debug":
@@ -357,6 +361,7 @@ func setupLogger(cfg config.LoggingConfig, tuiApp *tui.TUIApp) *slog.Logger {
 	handler = &SimpleHandler{
 		level:                    level,
 		tuiApp:                   tuiApp,
+		webUIServer:              webUIServer,
 		fileRotator:              fileRotator,
 		disableFileResponseLimit: cfg.FileEnabled && cfg.DisableResponseLimit,
 	}
@@ -374,6 +379,7 @@ func setupLogger(cfg config.LoggingConfig, tuiApp *tui.TUIApp) *slog.Logger {
 type SimpleHandler struct {
 	level                    slog.Level
 	tuiApp                   *tui.TUIApp
+	webUIServer              *webui.WebUIServer
 	fileRotator              *logging.FileRotator
 	disableFileResponseLimit bool // Whether to disable response limit for file output
 }
@@ -418,8 +424,16 @@ func (h *SimpleHandler) Handle(_ context.Context, r slog.Record) error {
 	// Send to TUI if available
 	if h.tuiApp != nil {
 		h.tuiApp.AddLog(level, displayMessage, "system")
-	} else {
-		// Only output to console when TUI is not available - include timestamp and level
+	}
+
+	// Send to WebUI if available
+	if h.webUIServer != nil {
+		h.webUIServer.AddLog(level, displayMessage, "system")
+	}
+
+	// Only output to console when neither TUI nor WebUI is capturing logs
+	if h.tuiApp == nil {
+		// Include timestamp and level for console output
 		fmt.Printf("[%s] [%s] %s\n", timestamp, level, displayMessage)
 	}
 

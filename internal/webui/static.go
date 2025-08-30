@@ -538,6 +538,59 @@ tr:hover {
 .loading {
     animation: pulse 2s infinite;
 }
+
+/* Log entry animations */
+.log-entry {
+    display: flex;
+    gap: 10px;
+    padding: 8px 0;
+    border-bottom: 1px solid #334155;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    animation: logFadeIn 0.3s ease-in;
+}
+
+@keyframes logFadeIn {
+    from { 
+        opacity: 0; 
+        transform: translateY(-10px);
+        background-color: rgba(96, 165, 250, 0.2);
+    }
+    to { 
+        opacity: 1; 
+        transform: translateY(0);
+        background-color: transparent;
+    }
+}
+
+/* Scrollable log container */
+#logs-content {
+    max-height: 500px;
+    overflow-y: auto;
+    padding: 10px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 8px;
+}
+
+/* Custom scrollbar */
+#logs-content::-webkit-scrollbar {
+    width: 8px;
+}
+
+#logs-content::-webkit-scrollbar-track {
+    background: #1e293b;
+    border-radius: 4px;
+}
+
+#logs-content::-webkit-scrollbar-thumb {
+    background: #475569;
+    border-radius: 4px;
+}
+
+#logs-content::-webkit-scrollbar-thumb:hover {
+    background: #64748b;
+}
 `
 
 // appJS contains the JavaScript application code
@@ -547,12 +600,14 @@ class WebUIApp {
         this.currentTab = 'overview';
         this.selectedEndpoint = null;
         this.eventSource = null;
+        this.logEventSource = null;
         this.init();
     }
 
     init() {
         this.setupTabs();
         this.setupEventSource();
+        this.setupLogStream();
         this.loadAllData();
 
         // Refresh data every 5 seconds as fallback
@@ -604,11 +659,80 @@ class WebUIApp {
         };
     }
 
+    setupLogStream() {
+        if (this.logEventSource) {
+            this.logEventSource.close();
+        }
+
+        this.logEventSource = new EventSource('/api/log-stream');
+
+        this.logEventSource.onmessage = (event) => {
+            try {
+                const logEntry = JSON.parse(event.data);
+                this.addLogToUI(logEntry);
+            } catch (e) {
+                console.error('Error parsing log stream data:', e);
+            }
+        };
+
+        this.logEventSource.onerror = (error) => {
+            console.error('Log stream connection error:', error);
+            // Reconnect after 3 seconds
+            setTimeout(() => this.setupLogStream(), 3000);
+        };
+    }
+
     updateStatusBar(data) {
         document.getElementById('status-requests').textContent = 'Requests: ' + data.totalRequests;
         document.getElementById('status-success').textContent = 'Success: ' + data.successRate.toFixed(1) + '%';
         document.getElementById('status-connections').textContent = 'Connections: ' + data.activeConnections;
         document.getElementById('last-update').textContent = 'Last Update: ' + new Date().toLocaleTimeString();
+    }
+
+    addLogToUI(logEntry) {
+        // Only update if we're on the logs tab
+        if (this.currentTab !== 'logs') {
+            return;
+        }
+
+        const logsContent = document.getElementById('logs-content');
+        if (!logsContent) {
+            return;
+        }
+
+        // Create new log entry element
+        const logDiv = document.createElement('div');
+        logDiv.className = 'log-entry';
+
+        const levelClass = logEntry.level.toLowerCase();
+        const levelText = logEntry.level.substring(0, 3);
+
+        logDiv.innerHTML = 
+            '<span class="log-time">' + logEntry.timestamp + '</span>' +
+            '<span class="log-level ' + levelClass + '">[' + levelText + ']</span>' +
+            '<span class="log-source">' + logEntry.source + '</span>' +
+            '<span class="log-message">' + logEntry.message + '</span>';
+
+        // Insert at the top (most recent first)
+        const firstChild = logsContent.firstChild;
+        if (firstChild) {
+            logsContent.insertBefore(logDiv, firstChild);
+        } else {
+            logsContent.appendChild(logDiv);
+        }
+
+        // Keep only latest 500 log entries in UI to prevent memory issues
+        const logEntries = logsContent.querySelectorAll('.log-entry');
+        if (logEntries.length > 500) {
+            for (let i = 500; i < logEntries.length; i++) {
+                logEntries[i].remove();
+            }
+        }
+
+        // Auto-scroll to top if user is already at the top
+        if (logsContent.scrollTop < 50) {
+            logsContent.scrollTop = 0;
+        }
     }
 
     async loadAllData() {
@@ -863,15 +987,19 @@ class WebUIApp {
             logsContent.innerHTML = '';
 
             if (data.logs && data.logs.length > 0) {
-                data.logs.forEach(log => {
+                // Display logs in reverse order (most recent first)
+                const reversedLogs = data.logs.slice().reverse();
+                
+                reversedLogs.forEach(log => {
                     const div = document.createElement('div');
                     div.className = 'log-entry';
 
                     const levelClass = log.level.toLowerCase();
+                    const levelText = log.level.substring(0, 3);
 
                     div.innerHTML =
                         '<span class="log-time">' + log.timestamp + '</span>' +
-                        '<span class="log-level ' + levelClass + '">[' + log.level.substring(0, 3) + ']</span>' +
+                        '<span class="log-level ' + levelClass + '">[' + levelText + ']</span>' +
                         '<span class="log-source">' + log.source + '</span>' +
                         '<span class="log-message">' + log.message + '</span>';
 
@@ -879,12 +1007,14 @@ class WebUIApp {
                 });
             } else {
                 const div = document.createElement('div');
-                div.innerHTML = '<p class="placeholder">No logs available</p>';
+                div.innerHTML = '<p class="placeholder">No logs available yet...</p>';
                 logsContent.appendChild(div);
             }
 
         } catch (error) {
             console.error('Error loading logs:', error);
+            const logsContent = document.getElementById('logs-content');
+            logsContent.innerHTML = '<p class="placeholder" style="color: #ef4444;">Error loading logs: ' + error.message + '</p>';
         }
     }
 

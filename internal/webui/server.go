@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"endpoint_forwarder/config"
@@ -13,6 +14,96 @@ import (
 	"endpoint_forwarder/internal/middleware"
 	"endpoint_forwarder/internal/monitor"
 )
+
+// LogEntry represents a log entry for WebUI
+type LogEntry struct {
+	Timestamp string `json:"timestamp"`
+	Level     string `json:"level"`
+	Source    string `json:"source"`
+	Message   string `json:"message"`
+}
+
+// LogCollector collects and manages logs for WebUI display
+type LogCollector struct {
+	logs        []LogEntry
+	maxLogs     int
+	mutex       sync.RWMutex
+	subscribers []chan LogEntry
+}
+
+// NewLogCollector creates a new log collector
+func NewLogCollector(maxLogs int) *LogCollector {
+	return &LogCollector{
+		logs:        make([]LogEntry, 0, maxLogs),
+		maxLogs:     maxLogs,
+		subscribers: make([]chan LogEntry, 0),
+	}
+}
+
+// AddLog adds a new log entry and notifies subscribers
+func (lc *LogCollector) AddLog(level, message, source string) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+
+	entry := LogEntry{
+		Timestamp: time.Now().Format("15:04:05"),
+		Level:     level,
+		Source:    source,
+		Message:   message,
+	}
+
+	// Add to logs buffer
+	lc.logs = append(lc.logs, entry)
+	
+	// Keep only the latest maxLogs entries
+	if len(lc.logs) > lc.maxLogs {
+		lc.logs = lc.logs[1:]
+	}
+
+	// Notify all subscribers
+	for _, subscriber := range lc.subscribers {
+		select {
+		case subscriber <- entry:
+		default:
+			// Skip if subscriber's channel is full
+		}
+	}
+}
+
+// GetLogs returns all current logs
+func (lc *LogCollector) GetLogs() []LogEntry {
+	lc.mutex.RLock()
+	defer lc.mutex.RUnlock()
+	
+	// Return a copy of logs
+	result := make([]LogEntry, len(lc.logs))
+	copy(result, lc.logs)
+	return result
+}
+
+// Subscribe adds a new subscriber for real-time log updates
+func (lc *LogCollector) Subscribe() chan LogEntry {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+	
+	subscriber := make(chan LogEntry, 100) // Buffer for 100 log entries
+	lc.subscribers = append(lc.subscribers, subscriber)
+	return subscriber
+}
+
+// Unsubscribe removes a subscriber
+func (lc *LogCollector) Unsubscribe(subscriber chan LogEntry) {
+	lc.mutex.Lock()
+	defer lc.mutex.Unlock()
+	
+	for i, sub := range lc.subscribers {
+		if sub == subscriber {
+			lc.subscribers = append(lc.subscribers[:i], lc.subscribers[i+1:]...)
+			close(subscriber)
+			break
+		}
+	}
+}
 
 // WebUIServer represents the WebUI server
 type WebUIServer struct {
@@ -22,6 +113,7 @@ type WebUIServer struct {
 	startTime            time.Time
 	server               *http.Server
 	logger               *slog.Logger
+	logCollector         *LogCollector
 	running              bool
 }
 
@@ -33,7 +125,15 @@ func NewWebUIServer(cfg *config.Config, endpointManager *endpoint.Manager, monit
 		monitoringMiddleware: monitoringMiddleware,
 		startTime:            startTime,
 		logger:               logger,
+		logCollector:         NewLogCollector(500), // Keep consistent with TUI (500 logs)
 		running:              false,
+	}
+}
+
+// AddLog allows external systems to add logs to the collector
+func (w *WebUIServer) AddLog(level, message, source string) {
+	if w.logCollector != nil {
+		w.logCollector.AddLog(level, message, source)
 	}
 }
 
@@ -58,6 +158,9 @@ func (w *WebUIServer) Start() error {
 
 	// Server-Sent Events for real-time updates
 	mux.HandleFunc("/api/events", w.handleEvents)
+	
+	// Server-Sent Events for real-time log updates  
+	mux.HandleFunc("/api/log-stream", w.handleLogStream)
 
 	w.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", w.cfg.WebUI.Host, w.cfg.WebUI.Port),
@@ -282,19 +385,23 @@ func (w *WebUIServer) handleConnections(rw http.ResponseWriter, r *http.Request)
 	w.writeJSON(rw, data)
 }
 
-// handleLogs returns logs data (placeholder - logs would need to be collected)
+// handleLogs returns logs data
 func (w *WebUIServer) handleLogs(rw http.ResponseWriter, r *http.Request) {
-	// For now, return empty logs since we don't have a centralized log collector
-	// In a full implementation, you'd want to integrate with the logging system
+	logs := w.logCollector.GetLogs()
+	
+	// Convert LogEntry to the format expected by the frontend
+	logData := make([]map[string]interface{}, 0, len(logs))
+	for _, log := range logs {
+		logData = append(logData, map[string]interface{}{
+			"timestamp": log.Timestamp,
+			"level":     log.Level,
+			"source":    log.Source,
+			"message":   log.Message,
+		})
+	}
+
 	data := map[string]interface{}{
-		"logs": []map[string]interface{}{
-			{
-				"timestamp": time.Now().Format("15:04:05"),
-				"level":     "INFO",
-				"source":    "webui",
-				"message":   "WebUI服务器正在运行",
-			},
-		},
+		"logs": logData,
 	}
 
 	w.writeJSON(rw, data)
@@ -372,6 +479,47 @@ func (w *WebUIServer) handleEvents(rw http.ResponseWriter, r *http.Request) {
 			jsonData, _ := json.Marshal(data)
 			fmt.Fprintf(rw, "data: %s\n\n", jsonData)
 
+			if flusher, ok := rw.(http.Flusher); ok {
+				flusher.Flush()
+			}
+		}
+	}
+}
+
+// handleLogStream provides Server-Sent Events for real-time log updates
+func (w *WebUIServer) handleLogStream(rw http.ResponseWriter, r *http.Request) {
+	// Set headers for SSE
+	rw.Header().Set("Content-Type", "text/event-stream")
+	rw.Header().Set("Cache-Control", "no-cache")
+	rw.Header().Set("Connection", "keep-alive")
+	rw.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Create a channel to signal when the client disconnects
+	clientGone := r.Context().Done()
+	
+	// Subscribe to log updates
+	logChannel := w.logCollector.Subscribe()
+	defer w.logCollector.Unsubscribe(logChannel)
+
+	// Send initial logs
+	initialLogs := w.logCollector.GetLogs()
+	for _, log := range initialLogs {
+		jsonData, _ := json.Marshal(log)
+		fmt.Fprintf(rw, "data: %s\n\n", jsonData)
+		if flusher, ok := rw.(http.Flusher); ok {
+			flusher.Flush()
+		}
+	}
+
+	// Stream real-time log updates
+	for {
+		select {
+		case <-clientGone:
+			return
+		case logEntry := <-logChannel:
+			jsonData, _ := json.Marshal(logEntry)
+			fmt.Fprintf(rw, "data: %s\n\n", jsonData)
+			
 			if flusher, ok := rw.(http.Flusher); ok {
 				flusher.Flush()
 			}
