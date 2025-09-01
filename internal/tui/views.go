@@ -299,7 +299,14 @@ func (v *EndpointsView) updateTableTitle() {
 		if v.tuiApp.HasUnsavedChanges() {
 			isDirty = " *"
 		}
-		title = fmt.Sprintf(" 🎯 Endpoints [编辑模式%s - ESC退出 Ctrl+S保存] ", isDirty)
+		
+		// Check if saving is enabled
+		saveHint := "Ctrl+S保存"
+		if v.tuiApp != nil && !v.tuiApp.IsSaveEnabled() {
+			saveHint = "Ctrl+S保存(不保存至文件)"
+		}
+		
+		title = fmt.Sprintf(" 🎯 Endpoints [编辑模式%s - ESC退出 %s] ", isDirty, saveHint)
 	} else {
 		title = " 🎯 Endpoints [Enter编辑 数字键选择优先级] "
 	}
@@ -819,7 +826,16 @@ func (v *ConfigView) Update() {
 	details.WriteString("\n")
 	
 	details.WriteString("[blue::b]🖥️ TUI Settings[white::-]\n")
-	details.WriteString(fmt.Sprintf("Update Interval: [cyan]%v[white]\n\n", v.cfg.TUI.UpdateInterval))
+	details.WriteString(fmt.Sprintf("Update Interval: [cyan]%v[white]\n", v.cfg.TUI.UpdateInterval))
+	
+	saveStatus := "[red]Disabled[white]"
+	saveHint := "Changes are applied to memory only"
+	if v.cfg.TUI.SavePriorityEdits {
+		saveStatus = "[green]Enabled[white]"
+		saveHint = "Priority edits are saved to config file"
+	}
+	details.WriteString(fmt.Sprintf("Save Priority Edits: %s\n", saveStatus))
+	details.WriteString(fmt.Sprintf("[gray]%s[white]\n\n", saveHint))
 	
 	details.WriteString("[blue::b]🎯 Endpoints[white::-]\n")
 	details.WriteString(fmt.Sprintf("Total: [cyan]%d[white]\n", len(v.cfg.Endpoints)))

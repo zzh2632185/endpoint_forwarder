@@ -523,6 +523,11 @@ func (t *TUIApp) HasUnsavedChanges() bool {
 	return t.editMode && t.isDirty
 }
 
+// IsSaveEnabled returns whether saving to config file is enabled
+func (t *TUIApp) IsSaveEnabled() bool {
+	return t.cfg.TUI.SavePriorityEdits
+}
+
 // SavePrioritiesToConfig saves the temporary priorities to the config file
 func (t *TUIApp) SavePrioritiesToConfig() error {
 	t.editMutex.Lock()
@@ -543,13 +548,18 @@ func (t *TUIApp) SavePrioritiesToConfig() error {
 	// **关键修复**: 同步配置到EndpointManager
 	t.endpointManager.UpdateConfig(t.cfg)
 	
-	// 保存到配置文件（保留注释）
-	if err := config.SavePriorityConfigWithComments(t.cfg, t.configPath); err != nil {
-		t.AddLog("ERROR", fmt.Sprintf("保存配置文件失败: %v", err), "TUI")
-		return err
+	// 检查是否允许保存到配置文件
+	if t.cfg.TUI.SavePriorityEdits {
+		// 保存到配置文件（保留注释）
+		if err := config.SavePriorityConfigWithComments(t.cfg, t.configPath); err != nil {
+			t.AddLog("ERROR", fmt.Sprintf("保存配置文件失败: %v", err), "TUI")
+			return err
+		}
+		t.AddLog("INFO", "配置已保存到文件并同步到路由系统，优先级更改已生效", "TUI")
+	} else {
+		t.AddLog("INFO", "优先级更改已应用到内存（配置文件保存已禁用）", "TUI")
 	}
 	
-	t.AddLog("INFO", "配置已保存到文件并同步到路由系统，优先级更改已生效", "TUI")
 	t.isDirty = false
 	
 	return nil

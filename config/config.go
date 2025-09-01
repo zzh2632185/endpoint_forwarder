@@ -88,8 +88,9 @@ type AuthConfig struct {
 }
 
 type TUIConfig struct {
-	Enabled       bool          `yaml:"enabled"`        // Enable TUI interface, default: true
-	UpdateInterval time.Duration `yaml:"update_interval"` // TUI refresh interval, default: 1s
+	Enabled         bool          `yaml:"enabled"`        // Enable TUI interface, default: true
+	UpdateInterval  time.Duration `yaml:"update_interval"` // TUI refresh interval, default: 1s
+	SavePriorityEdits bool         `yaml:"save_priority_edits"` // Save priority edits to config file, default: false
 }
 
 type EndpointConfig struct {
@@ -204,6 +205,8 @@ func (c *Config) setDefaults() {
 	}
 	// TUI enabled defaults to true if not explicitly set in YAML
 	// This will be handled by the application logic
+	// Save priority edits defaults to false for safety
+	// Note: We don't set a default here since the zero value (false) is what we want
 
 	// Set default timeouts for endpoints and handle parameter inheritance
 	var defaultEndpoint *EndpointConfig
