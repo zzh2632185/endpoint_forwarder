@@ -208,7 +208,7 @@ func (c *Config) setDefaults() {
 
 	// Set group defaults
 	if c.Group.Cooldown == 0 {
-		c.Group.Cooldown = 60 * time.Second // Default 1 minute cooldown for groups
+		c.Group.Cooldown = 600 * time.Second // Default 1 minute cooldown for groups
 	}
 
 	// Set TUI defaults

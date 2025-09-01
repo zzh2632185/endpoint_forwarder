@@ -6,7 +6,7 @@ server:
   host: "127.0.0.1"      # 监听地址，默认: localhost
   port: 8087             # 监听端口，默认: 8080
 
-# 路由策略配置
+# 路由策略配置(适用于组内)
 strategy:
   type: "fastest"                  # 路由策略: "priority" (优先级) 或 "fastest" (最快响应)
   fast_test_enabled: true          # 启用快速测试 (仅在 fastest 策略下生效)
@@ -48,7 +48,7 @@ streaming:
 
 # 组管理配置
 group:
-  cooldown: "120s"           # 组失败后的冷却时间，默认: 60s
+  cooldown: "600s"           # 组失败后的冷却时间，默认: 600s
 
 # 全局超时配置
 global_timeout: "300s"       # 非流式请求的全局默认超时时间，默认: 300s (5分钟)
