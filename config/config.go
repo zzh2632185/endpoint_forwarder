@@ -97,6 +97,7 @@ type EndpointConfig struct {
 	URL      string            `yaml:"url"`
 	Priority int               `yaml:"priority"`
 	Token    string            `yaml:"token,omitempty"`
+	ApiKey   string            `yaml:"api-key,omitempty"`
 	Timeout  time.Duration     `yaml:"timeout"`
 	Headers  map[string]string `yaml:"headers,omitempty"`
 }
@@ -225,6 +226,11 @@ func (c *Config) setDefaults() {
 		// Inherit token from first endpoint if not specified
 		if c.Endpoints[i].Token == "" && defaultEndpoint != nil && defaultEndpoint.Token != "" {
 			c.Endpoints[i].Token = defaultEndpoint.Token
+		}
+		
+		// Inherit api-key from first endpoint if not specified
+		if c.Endpoints[i].ApiKey == "" && defaultEndpoint != nil && defaultEndpoint.ApiKey != "" {
+			c.Endpoints[i].ApiKey = defaultEndpoint.ApiKey
 		}
 		
 		// Inherit headers from first endpoint if not specified

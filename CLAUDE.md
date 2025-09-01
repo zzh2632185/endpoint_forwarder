@@ -56,7 +56,7 @@ go test ./internal/middleware
 
 1. Request reception with middleware chain (auth → logging → monitoring)
 2. Endpoint selection based on strategy and health status
-3. Header transformation (strip client auth, inject endpoint tokens)
+3. Header transformation (strip client auth, inject endpoint tokens and API keys)
 4. Request forwarding with timeout and retry handling
 5. Response streaming (SSE) or buffered response handling
 6. Error handling with automatic endpoint fallback
@@ -65,8 +65,9 @@ go test ./internal/middleware
 
 - **Primary config**: `config/config.yaml` (copy from `config/example.yaml`)
 - **Hot-reloading**: Automatic configuration reload via fsnotify with 500ms debounce
-- **Inheritance**: Subsequent endpoints inherit `token`, `timeout`, and `headers` from first endpoint
+- **Inheritance**: Subsequent endpoints inherit `token`, `api-key`, `timeout`, and `headers` from first endpoint
 - **Global timeout**: Default timeout for all non-streaming requests (5 minutes)
+- **API Key support**: Endpoints can specify `api-key` field which is automatically passed as `X-Api-Key` header
 
 ## Testing Approach
 
@@ -85,6 +86,6 @@ The codebase includes comprehensive unit tests:
 
 **Proxy Support**: HTTP/HTTPS/SOCKS5 proxy configuration for all outbound requests
 
-**Security**: Bearer token authentication with automatic header stripping and token injection
+**Security**: Bearer token authentication with automatic header stripping and token injection. API key support with X-Api-Key header injection.
 
 **Health Monitoring**: Continuous endpoint health checking with `/v1/models` endpoint testing

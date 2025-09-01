@@ -84,24 +84,26 @@ endpoints:
     url: "https://api.openai.com"
     priority: 1              # 优先级 (数字越小优先级越高)
     timeout: "300s"           # 请求超时时间，如果不设置则使用 global_timeout
-    token: "sk-your-openai-api-key"  # API 密钥
+    token: "sk-your-openai-api-key"  # API 密钥 (用于 Authorization 头)
+    api-key: "your-api-key-value"    # API 密钥 (用于 X-Api-Key 头)
     headers:                 # 自定义请求头
       User-Agent: "Claude-Request-Forwarder/1.0"
       X-Custom-Header: "custom-value"
 
-  # 备用端点 1 - 会继承主要端点的 token 和 headers
+  # 备用端点 1 - 会继承主要端点的 token、api-key 和 headers
   - name: "backup1"
     url: "https://api.anthropic.com"
     priority: 2
     timeout: "300s"
-    # token 和 headers 会从第一个端点继承
+    # token、api-key 和 headers 会从第一个端点继承
 
-  # 备用端点 2 - 使用不同的 token 和 headers
+  # 备用端点 2 - 使用不同的 token、api-key 和 headers
   - name: "backup2"
     url: "https://api.example.com"
     priority: 3
     timeout: "300s"
     token: "sk-different-api-key"  # 覆盖继承的 token
+    api-key: "different-api-key"    # 覆盖继承的 api-key
     headers:
       Authorization: "Bearer custom-token"
       X-API-Version: "2024-01"
