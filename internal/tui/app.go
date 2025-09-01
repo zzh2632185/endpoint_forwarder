@@ -91,7 +91,7 @@ func (t *TUIApp) setupUI() {
 	t.overviewView = NewOverviewView(t.monitoringMiddleware, t.endpointManager, t.startTime)
 	t.endpointsView = NewEndpointsView(t.monitoringMiddleware, t.endpointManager)
 	t.endpointsView.SetTUIApp(t)  // Set reference for edit mode functionality
-	t.connectionsView = NewConnectionsView(t.monitoringMiddleware, t.cfg)
+	t.connectionsView = NewConnectionsView(t.monitoringMiddleware, t.endpointManager, t.cfg)
 	t.logsView = NewLogsView()
 	t.configView = NewConfigView(t.cfg)
 

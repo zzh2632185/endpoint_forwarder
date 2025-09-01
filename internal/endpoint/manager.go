@@ -30,13 +30,14 @@ type Endpoint struct {
 
 // Manager manages endpoints and their health status
 type Manager struct {
-	endpoints  []*Endpoint
-	config     *config.Config
-	client     *http.Client
-	ctx        context.Context
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	fastTester *FastTester
+	endpoints    []*Endpoint
+	config       *config.Config
+	client       *http.Client
+	ctx          context.Context
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	fastTester   *FastTester
+	groupManager *GroupManager
 }
 
 // NewManager creates a new endpoint manager
@@ -53,14 +54,15 @@ func NewManager(cfg *config.Config) *Manager {
 	
 	
 	manager := &Manager{
-		config: cfg,
+		config:       cfg,
 		client: &http.Client{
 			Timeout:   cfg.Health.Timeout,
 			Transport: httpTransport,
 		},
-		ctx:        ctx,
-		cancel:     cancel,
-		fastTester: NewFastTester(cfg),
+		ctx:          ctx,
+		cancel:       cancel,
+		fastTester:   NewFastTester(cfg),
+		groupManager: NewGroupManager(cfg),
 	}
 
 	// Initialize endpoints
@@ -74,6 +76,9 @@ func NewManager(cfg *config.Config) *Manager {
 		}
 		manager.endpoints = append(manager.endpoints, endpoint)
 	}
+
+	// Initialize groups from endpoints
+	manager.groupManager.UpdateGroups(manager.endpoints)
 
 	return manager
 }
@@ -107,6 +112,10 @@ func (m *Manager) UpdateConfig(cfg *config.Config) {
 	}
 	m.endpoints = endpoints
 	
+	// Update group manager with new config and endpoints
+	m.groupManager.UpdateConfig(cfg)
+	m.groupManager.UpdateGroups(m.endpoints)
+	
 	// Update fast tester with new config
 	if m.fastTester != nil {
 		m.fastTester.UpdateConfig(cfg)
@@ -121,11 +130,14 @@ func (m *Manager) UpdateConfig(cfg *config.Config) {
 	}
 }
 
-// GetHealthyEndpoints returns a list of healthy endpoints based on strategy
+// GetHealthyEndpoints returns a list of healthy endpoints from active groups based on strategy
 func (m *Manager) GetHealthyEndpoints() []*Endpoint {
-	var healthy []*Endpoint
+	// First filter by active groups
+	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(m.endpoints)
 	
-	for _, endpoint := range m.endpoints {
+	// Then filter by health status
+	var healthy []*Endpoint
+	for _, endpoint := range activeEndpoints {
 		endpoint.mutex.RLock()
 		if endpoint.Status.Healthy {
 			healthy = append(healthy, endpoint)
@@ -169,12 +181,13 @@ func (m *Manager) sortHealthyEndpoints(healthy []*Endpoint, showLogs bool) []*En
 	return healthy
 }
 
-// GetFastestEndpointsWithRealTimeTest returns endpoints sorted by real-time testing
+// GetFastestEndpointsWithRealTimeTest returns endpoints from active groups sorted by real-time testing
 func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*Endpoint {
-	// First get basic healthy endpoints list without logging
-	var healthy []*Endpoint
+	// First get endpoints from active groups and filter by health
+	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(m.endpoints)
 	
-	for _, endpoint := range m.endpoints {
+	var healthy []*Endpoint
+	for _, endpoint := range activeEndpoints {
 		endpoint.mutex.RLock()
 		if endpoint.Status.Healthy {
 			healthy = append(healthy, endpoint)
@@ -196,39 +209,41 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 	
 	// Only show health check sorting if we're NOT using cache
 	if !usedCache && m.config.Strategy.Type == "fastest" && len(healthy) > 1 {
-		slog.InfoContext(ctx, "📊 [Fastest Strategy] 基于健康检查的端点延迟排序:")
+		slog.InfoContext(ctx, "📊 [Fastest Strategy] 基于健康检查的活跃组端点延迟排序:")
 		for _, ep := range healthy {
 			ep.mutex.RLock()
 			responseTime := ep.Status.ResponseTime
+			group := ep.Config.Group
 			ep.mutex.RUnlock()
-			slog.InfoContext(ctx, fmt.Sprintf("  ⏱️ %s - 延迟: %dms (来源: 定期健康检查)", 
-				ep.Config.Name, responseTime.Milliseconds()))
+			slog.InfoContext(ctx, fmt.Sprintf("  ⏱️ %s (组: %s) - 延迟: %dms (来源: 定期健康检查)", 
+				ep.Config.Name, group, responseTime.Milliseconds()))
 		}
 	}
 	
 	// Log ALL test results first (including failures) - but only if cache wasn't used
 	if len(testResults) > 0 && !usedCache {
-		slog.InfoContext(ctx, "🔍 [Fastest Response Mode] 端点性能测试结果:")
+		slog.InfoContext(ctx, "🔍 [Fastest Response Mode] 活跃组端点性能测试结果:")
 		successCount := 0
 		for _, result := range testResults {
+			group := result.Endpoint.Config.Group
 			if result.Success {
 				successCount++
-				slog.InfoContext(ctx, fmt.Sprintf("  ✅ 健康 %s - 响应时间: %dms", 
-					result.Endpoint.Config.Name, 
+				slog.InfoContext(ctx, fmt.Sprintf("  ✅ 健康 %s (组: %s) - 响应时间: %dms", 
+					result.Endpoint.Config.Name, group,
 					result.ResponseTime.Milliseconds()))
 			} else {
 				errorMsg := ""
 				if result.Error != nil {
 					errorMsg = fmt.Sprintf(" - 错误: %s", result.Error.Error())
 				}
-				slog.InfoContext(ctx, fmt.Sprintf("  ❌ 异常 %s - 响应时间: %dms%s", 
-					result.Endpoint.Config.Name, 
+				slog.InfoContext(ctx, fmt.Sprintf("  ❌ 异常 %s (组: %s) - 响应时间: %dms%s", 
+					result.Endpoint.Config.Name, group,
 					result.ResponseTime.Milliseconds(),
 					errorMsg))
 			}
 		}
 		
-		slog.InfoContext(ctx, fmt.Sprintf("📊 [测试摘要] 总共测试: %d个端点, 健康: %d个, 异常: %d个",
+		slog.InfoContext(ctx, fmt.Sprintf("📊 [测试摘要] 活跃组测试: %d个端点, 健康: %d个, 异常: %d个",
 			len(testResults), successCount, len(testResults)-successCount))
 	}
 	
@@ -236,7 +251,7 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 	sortedResults := SortByResponseTime(testResults)
 	
 	if len(sortedResults) == 0 {
-		slog.WarnContext(ctx, "⚠️ [Fastest Response Mode] 所有端点测试失败，回退到健康检查模式")
+		slog.WarnContext(ctx, "⚠️ [Fastest Response Mode] 活跃组所有端点测试失败，回退到健康检查模式")
 		return healthy // Fall back to health check results if no fast tests succeeded
 	}
 	
@@ -251,9 +266,11 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 		// Show the fastest endpoint selection
 		fastestEndpoint := endpoints[0]
 		var fastestTime int64
+		var fastestGroup string
 		for _, result := range sortedResults {
 			if result.Endpoint == fastestEndpoint {
 				fastestTime = result.ResponseTime.Milliseconds()
+				fastestGroup = result.Endpoint.Config.Group
 				break
 			}
 		}
@@ -263,8 +280,8 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 			cacheIndicator = " (缓存)"
 		}
 		
-		slog.InfoContext(ctx, fmt.Sprintf("🚀 [Fastest Response Mode] 选择最快端点: %s (%dms)%s", 
-			fastestEndpoint.Config.Name, fastestTime, cacheIndicator))
+		slog.InfoContext(ctx, fmt.Sprintf("🚀 [Fastest Response Mode] 选择最快端点: %s (组: %s, %dms)%s", 
+			fastestEndpoint.Config.Name, fastestGroup, fastestTime, cacheIndicator))
 		
 		// Show other available endpoints if there are more than one
 		if len(endpoints) > 1 && !usedCache {
@@ -272,14 +289,16 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 			for i := 1; i < len(endpoints); i++ {
 				ep := endpoints[i]
 				var responseTime int64
+				var epGroup string
 				for _, result := range sortedResults {
 					if result.Endpoint == ep {
 						responseTime = result.ResponseTime.Milliseconds()
+						epGroup = result.Endpoint.Config.Group
 						break
 					}
 				}
-				slog.InfoContext(ctx, fmt.Sprintf("  🔄 备用 %s - 响应时间: %dms", 
-					ep.Config.Name, responseTime))
+				slog.InfoContext(ctx, fmt.Sprintf("  🔄 备用 %s (组: %s) - 响应时间: %dms", 
+					ep.Config.Name, epGroup, responseTime))
 			}
 		}
 	}
@@ -307,6 +326,11 @@ func (m *Manager) GetConfig() *config.Config {
 	return m.config
 }
 
+// GetGroupManager returns the group manager
+func (m *Manager) GetGroupManager() *GroupManager {
+	return m.groupManager
+}
+
 // healthCheckLoop runs the health check routine
 func (m *Manager) healthCheckLoop() {
 	defer m.wg.Done()
@@ -329,11 +353,21 @@ func (m *Manager) healthCheckLoop() {
 
 // performHealthChecks performs health checks on all endpoints
 func (m *Manager) performHealthChecks() {
-	slog.Debug(fmt.Sprintf("🩺 [健康检查] 开始检查 %d 个端点", len(m.endpoints)))
+	// Get endpoints from active groups only
+	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(m.endpoints)
+	
+	if len(activeEndpoints) == 0 {
+		slog.Debug("🩺 [健康检查] 没有活跃组中的端点，跳过健康检查")
+		return
+	}
+	
+	slog.Debug(fmt.Sprintf("🩺 [健康检查] 开始检查 %d 个活跃组端点 (总共 %d 个端点)", 
+		len(activeEndpoints), len(m.endpoints)))
 	
 	var wg sync.WaitGroup
 	
-	for _, endpoint := range m.endpoints {
+	// Only check endpoints in active groups
+	for _, endpoint := range activeEndpoints {
 		wg.Add(1)
 		go func(ep *Endpoint) {
 			defer wg.Done()
@@ -343,15 +377,15 @@ func (m *Manager) performHealthChecks() {
 	
 	wg.Wait()
 	
-	// Count healthy endpoints after checks
+	// Count healthy endpoints after checks (from active groups only)
 	healthyCount := 0
-	for _, ep := range m.endpoints {
+	for _, ep := range activeEndpoints {
 		if ep.IsHealthy() {
 			healthyCount++
 		}
 	}
 	
-	slog.Debug(fmt.Sprintf("🩺 [健康检查] 完成检查 - 健康: %d/%d", healthyCount, len(m.endpoints)))
+	slog.Debug(fmt.Sprintf("🩺 [健康检查] 完成检查 - 活跃组健康: %d/%d", healthyCount, len(activeEndpoints)))
 }
 
 // checkEndpointHealth checks the health of a single endpoint

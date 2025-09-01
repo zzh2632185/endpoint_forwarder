@@ -46,6 +46,10 @@ streaming:
   read_timeout: "10s"         # 读取超时，默认: 1s
   max_idle_time: "120s"      # 最大空闲时间，默认: 120s
 
+# 组管理配置
+group:
+  cooldown: "120s"           # 组失败后的冷却时间，默认: 60s
+
 # 全局超时配置
 global_timeout: "300s"       # 非流式请求的全局默认超时时间，默认: 300s (5分钟)
 
@@ -80,10 +84,12 @@ proxy:
 
 # 端点配置
 endpoints:
-  # 主要端点 - 其他端点会继承此端点的 token 和 headers (如果未指定)
+  # 主要组端点 - 其他端点会继承此端点的 token 和 headers (如果未指定)
   - name: "primary"
     url: "https://api.openai.com"
-    priority: 1              # 优先级 (数字越小优先级越高)
+    group: "main"            # 组名，用于分组管理
+    group-priority: 1        # 组优先级 (数字越小优先级越高)
+    priority: 1              # 组内优先级 (数字越小优先级越高)
     timeout: "300s"           # 请求超时时间，如果不设置则使用 global_timeout
     token: "sk-your-openai-api-key"  # API 密钥 (用于 Authorization 头)
     api-key: "your-api-key-value"    # API 密钥 (用于 X-Api-Key 头)
@@ -91,17 +97,21 @@ endpoints:
       User-Agent: "Claude-Request-Forwarder/1.0"
       X-Custom-Header: "custom-value"
 
-  # 备用端点 1 - 会继承主要端点的 token、api-key 和 headers
-  - name: "backup1"
+  # 主要组备用端点 - 会继承主要端点的 token、api-key、headers 和组设置
+  - name: "primary_backup"
     url: "https://api.anthropic.com"
-    priority: 2
+    priority: 2              # 组内优先级 2
     timeout: "300s"
+    # group: "main" (继承自上一个端点)
+    # group-priority: 1 (继承自上一个端点)
     # token、api-key 和 headers 会从第一个端点继承
 
-  # 备用端点 2 - 使用不同的 token、api-key 和 headers
-  - name: "backup2"
+  # 备用组端点 - 使用不同的组设置
+  - name: "backup1"
     url: "https://api.example.com"
-    priority: 3
+    group: "backup"          # 新的组名
+    group-priority: 2        # 备用组优先级
+    priority: 1              # 组内优先级
     timeout: "300s"
     token: "sk-different-api-key"  # 覆盖继承的 token
     api-key: "different-api-key"    # 覆盖继承的 api-key
@@ -110,9 +120,20 @@ endpoints:
       X-API-Version: "2024-01"
       # 其他 headers 仍会从第一个端点继承并与此处合并
 
-  # 本地端点示例
+  # 备用组的第二个端点 - 继承备用组设置
+  - name: "backup2"
+    url: "https://api.backup2.com"
+    priority: 2              # 组内优先级 2
+    timeout: "300s"
+    # group: "backup" (继承自上一个端点)
+    # group-priority: 2 (继承自上一个端点)
+    # 其他设置继承自backup1端点
+
+  # 本地端点组
   - name: "local"
     url: "http://localhost:11434"
-    priority: 4
+    group: "local"           # 本地组
+    group-priority: 3        # 最低组优先级
+    priority: 1              # 组内优先级
     timeout: "300s"
     # 本地服务通常不需要 token

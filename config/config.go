@@ -19,6 +19,7 @@ type Config struct {
 	Health       HealthConfig     `yaml:"health"`
 	Logging      LoggingConfig    `yaml:"logging"`
 	Streaming    StreamingConfig  `yaml:"streaming"`
+	Group        GroupConfig      `yaml:"group"`        // Group configuration
 	Proxy        ProxyConfig      `yaml:"proxy"`
 	Auth         AuthConfig       `yaml:"auth"`
 	TUI          TUIConfig        `yaml:"tui"`           // TUI configuration
@@ -72,6 +73,10 @@ type StreamingConfig struct {
 	MaxIdleTime       time.Duration `yaml:"max_idle_time"`
 }
 
+type GroupConfig struct {
+	Cooldown time.Duration `yaml:"cooldown"` // Cooldown duration for groups when all endpoints fail
+}
+
 type ProxyConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	Type     string `yaml:"type"`     // "http", "https", "socks5"
@@ -94,13 +99,15 @@ type TUIConfig struct {
 }
 
 type EndpointConfig struct {
-	Name     string            `yaml:"name"`
-	URL      string            `yaml:"url"`
-	Priority int               `yaml:"priority"`
-	Token    string            `yaml:"token,omitempty"`
-	ApiKey   string            `yaml:"api-key,omitempty"`
-	Timeout  time.Duration     `yaml:"timeout"`
-	Headers  map[string]string `yaml:"headers,omitempty"`
+	Name          string            `yaml:"name"`
+	URL           string            `yaml:"url"`
+	Priority      int               `yaml:"priority"`
+	Group         string            `yaml:"group,omitempty"`
+	GroupPriority int               `yaml:"group-priority,omitempty"`
+	Token         string            `yaml:"token,omitempty"`
+	ApiKey        string            `yaml:"api-key,omitempty"`
+	Timeout       time.Duration     `yaml:"timeout"`
+	Headers       map[string]string `yaml:"headers,omitempty"`
 }
 
 // LoadConfig loads configuration from file
@@ -199,6 +206,11 @@ func (c *Config) setDefaults() {
 		c.GlobalTimeout = 300 * time.Second // Default 5 minutes for non-streaming requests
 	}
 
+	// Set group defaults
+	if c.Group.Cooldown == 0 {
+		c.Group.Cooldown = 60 * time.Second // Default 1 minute cooldown for groups
+	}
+
 	// Set TUI defaults
 	if c.TUI.UpdateInterval == 0 {
 		c.TUI.UpdateInterval = 2 * time.Second // Default 2 second refresh (reduced from 1s)
@@ -214,7 +226,29 @@ func (c *Config) setDefaults() {
 		defaultEndpoint = &c.Endpoints[0]
 	}
 
+	// Handle group inheritance - endpoints inherit group settings from previous endpoint
+	var currentGroup string = "Default"       // Default group name
+	var currentGroupPriority int = 1          // Default group priority
+
 	for i := range c.Endpoints {
+		// Handle group inheritance - check if this endpoint defines a new group
+		if c.Endpoints[i].Group != "" {
+			// Endpoint specifies a group, use it and update current group
+			currentGroup = c.Endpoints[i].Group
+			if c.Endpoints[i].GroupPriority != 0 {
+				currentGroupPriority = c.Endpoints[i].GroupPriority
+			}
+		} else {
+			// Endpoint doesn't specify group, inherit from previous
+			c.Endpoints[i].Group = currentGroup
+			c.Endpoints[i].GroupPriority = currentGroupPriority
+		}
+		
+		// If GroupPriority is still 0 after inheritance, set default
+		if c.Endpoints[i].GroupPriority == 0 {
+			c.Endpoints[i].GroupPriority = currentGroupPriority
+		}
+
 		// Set default timeout if not specified
 		if c.Endpoints[i].Timeout == 0 {
 			if defaultEndpoint != nil && defaultEndpoint.Timeout != 0 {
