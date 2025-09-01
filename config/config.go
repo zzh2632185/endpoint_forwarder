@@ -564,3 +564,90 @@ func SaveConfig(config *Config, path string) error {
 	
 	return nil
 }
+
+// SaveConfigWithComments saves configuration to file while preserving all comments
+func SavePriorityConfigWithComments(config *Config, path string) error {
+	// Read existing file to preserve comments
+	yamlFile, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("failed to read existing config file: %w", err)
+	}
+
+	var rootNode yaml.Node
+	if len(yamlFile) > 0 {
+		// Decode existing YAML to preserve structure and comments
+		if err := yaml.Unmarshal(yamlFile, &rootNode); err != nil {
+			return fmt.Errorf("failed to decode existing YAML: %w", err)
+		}
+	} else {
+		// Create new YAML structure if file doesn't exist
+		rootNode = yaml.Node{}
+		if err := rootNode.Encode(config); err != nil {
+			return fmt.Errorf("failed to create new YAML structure: %w", err)
+		}
+	}
+
+	// Update endpoint priorities in the YAML node tree
+	if len(rootNode.Content) > 0 {
+		mappingNode := rootNode.Content[0]
+		
+		// Find endpoints section
+		for i := 0; i < len(mappingNode.Content); i += 2 {
+			keyNode := mappingNode.Content[i]
+			valueNode := mappingNode.Content[i+1]
+
+			if keyNode.Value == "endpoints" {
+				// Update each endpoint's priority
+				for _, endpointNode := range valueNode.Content {
+					var endpointName string
+					var priorityNode *yaml.Node
+					
+					// Find name and priority nodes for this endpoint
+					for j := 0; j < len(endpointNode.Content); j += 2 {
+						fieldKey := endpointNode.Content[j]
+						fieldValue := endpointNode.Content[j+1]
+						
+						if fieldKey.Value == "name" {
+							endpointName = fieldValue.Value
+						} else if fieldKey.Value == "priority" {
+							priorityNode = fieldValue
+						}
+					}
+					
+					// Find the corresponding endpoint in config and update priority
+					if endpointName != "" && priorityNode != nil {
+						for _, endpoint := range config.Endpoints {
+							if endpoint.Name == endpointName {
+								priorityNode.Value = fmt.Sprintf("%d", endpoint.Priority)
+								break
+							}
+						}
+					}
+				}
+				break
+			}
+		}
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	// Directly write to the original file
+	file, err := os.Create(path)
+	if err != nil {
+		return fmt.Errorf("failed to create config file: %w", err)
+	}
+	defer file.Close()
+
+	// Encode with comments
+	encoder := yaml.NewEncoder(file)
+	encoder.SetIndent(2)
+	if err := encoder.Encode(&rootNode); err != nil {
+		return fmt.Errorf("failed to encode YAML: %w", err)
+	}
+
+	return nil
+}

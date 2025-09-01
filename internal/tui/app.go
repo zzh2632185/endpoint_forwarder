@@ -543,8 +543,8 @@ func (t *TUIApp) SavePrioritiesToConfig() error {
 	// **关键修复**: 同步配置到EndpointManager
 	t.endpointManager.UpdateConfig(t.cfg)
 	
-	// 保存到配置文件
-	if err := config.SaveConfig(t.cfg, t.configPath); err != nil {
+	// 保存到配置文件（保留注释）
+	if err := config.SavePriorityConfigWithComments(t.cfg, t.configPath); err != nil {
 		t.AddLog("ERROR", fmt.Sprintf("保存配置文件失败: %v", err), "TUI")
 		return err
 	}
