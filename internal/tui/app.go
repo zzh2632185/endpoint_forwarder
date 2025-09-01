@@ -40,6 +40,7 @@ type TUIApp struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	running    bool
+	configPath string                 // Configuration file path
 	
 	// Edit mode state for priority editing
 	editMode        bool                // Whether we're in edit mode
@@ -55,7 +56,7 @@ type Tab struct {
 }
 
 // NewTUIApp creates a new TUI application
-func NewTUIApp(cfg *config.Config, endpointManager *endpoint.Manager, monitoringMiddleware *middleware.MonitoringMiddleware, startTime time.Time) *TUIApp {
+func NewTUIApp(cfg *config.Config, endpointManager *endpoint.Manager, monitoringMiddleware *middleware.MonitoringMiddleware, startTime time.Time, configPath string) *TUIApp {
 	app := tview.NewApplication()
 	ctx, cancel := context.WithCancel(context.Background())
 	
@@ -69,6 +70,7 @@ func NewTUIApp(cfg *config.Config, endpointManager *endpoint.Manager, monitoring
 		cancel:               cancel,
 		currentTab:           0,
 		running:              false,
+		configPath:           configPath,
 		tempPriorities:       make(map[string]int),
 		editMode:             false,
 		isDirty:              false,
@@ -541,7 +543,13 @@ func (t *TUIApp) SavePrioritiesToConfig() error {
 	// **关键修复**: 同步配置到EndpointManager
 	t.endpointManager.UpdateConfig(t.cfg)
 	
-	t.AddLog("INFO", "配置已更新并同步到路由系统，优先级更改已生效", "TUI")
+	// 保存到配置文件
+	if err := config.SaveConfig(t.cfg, t.configPath); err != nil {
+		t.AddLog("ERROR", fmt.Sprintf("保存配置文件失败: %v", err), "TUI")
+		return err
+	}
+	
+	t.AddLog("INFO", "配置已保存到文件并同步到路由系统，优先级更改已生效", "TUI")
 	t.isDirty = false
 	
 	return nil
