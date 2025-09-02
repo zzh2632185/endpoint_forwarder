@@ -543,7 +543,7 @@ func (v *EndpointsView) addEndpointRow(row int, ep *endpoint.Endpoint, metrics *
 	// Get effective priority (temp or config)
 	effectivePriority := ep.Config.Priority
 	if v.tuiApp != nil {
-		effectivePriority = v.tuiApp.GetEffectivePriority(ep.Config.Name)
+		effectivePriority = v.tuiApp.GetEffectivePriorityForEndpoint(ep)
 	}
 	
 	// Check if this is the highest priority endpoint in the group
@@ -563,7 +563,7 @@ func (v *EndpointsView) addEndpointRow(row int, ep *endpoint.Endpoint, metrics *
 				epGroupName = "Default"
 			}
 			if epGroupName == groupName {
-				priority := v.tuiApp.GetEffectivePriority(endpoint.Config.Name)
+				priority := v.tuiApp.GetEffectivePriorityForEndpoint(endpoint)
 				if priority < minPriority {
 					minPriority = priority
 				}
@@ -852,7 +852,7 @@ func (v *ConnectionsView) Update() {
 			endpointDisplay = "pending"
 		} else {
 			// Find the group for this endpoint
-			endpoint := v.endpointManager.GetEndpointByName(endpointDisplay)
+			endpoint := v.endpointManager.GetEndpointByNameAny(endpointDisplay)
 			if endpoint != nil {
 				if endpoint.Config.Group != "" {
 					groupName = endpoint.Config.Group

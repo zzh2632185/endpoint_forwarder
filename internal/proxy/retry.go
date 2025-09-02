@@ -264,11 +264,11 @@ func (rh *RetryHandler) shouldRetryStatusCode(statusCode int) *RetryableError {
 			Reason:      "身份验证失败，不重试",
 		}
 	case statusCode == 403:
-		// 403 Forbidden - don't retry (permission issue)
+		// 403 Forbidden - should retry (permission issue)
 		return &RetryableError{
 			StatusCode:  statusCode,
-			IsRetryable: false,
-			Reason:      "权限不足，不重试",
+			IsRetryable: true,
+			Reason:      "权限不足，重试中",
 		}
 	case statusCode == 404:
 		// 404 Not Found - don't retry (resource doesn't exist)

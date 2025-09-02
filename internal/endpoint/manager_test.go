@@ -153,3 +153,128 @@ func TestFastestStrategyLogging(t *testing.T) {
 		t.Errorf("Expected fast endpoint to have lower response time. Fast: %v, Slow: %v", fastTime, slowTime)
 	}
 }
+
+func TestGetEndpointByNameWithGroups(t *testing.T) {
+	// Create config with endpoints having same name in different groups
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			CheckInterval: 30 * time.Second,
+			Timeout:       5 * time.Second,
+			HealthPath:    "/v1/models",
+		},
+		Group: config.GroupConfig{
+			Cooldown: 10 * time.Minute,
+		},
+		Endpoints: []config.EndpointConfig{
+			{
+				Name:          "api-endpoint",
+				URL:           "https://primary.example.com",
+				Group:         "primary",
+				GroupPriority: 1,
+				Priority:      1,
+				Token:         "primary-token",
+				Timeout:       30 * time.Second,
+			},
+			{
+				Name:          "api-endpoint", // Same name, different group
+				URL:           "https://backup.example.com",
+				Group:         "backup",
+				GroupPriority: 2,
+				Priority:      1,
+				Token:         "backup-token",
+				Timeout:       30 * time.Second,
+			},
+		},
+	}
+
+	manager := NewManager(cfg)
+
+	// Test: With primary group active, should return primary endpoint
+	endpoint := manager.GetEndpointByName("api-endpoint")
+	if endpoint == nil {
+		t.Fatal("Expected to find endpoint by name, got nil")
+	}
+	if endpoint.Config.Group != "primary" {
+		t.Errorf("Expected primary group endpoint, got group: %s", endpoint.Config.Group)
+	}
+	if endpoint.Config.URL != "https://primary.example.com" {
+		t.Errorf("Expected primary URL, got: %s", endpoint.Config.URL)
+	}
+
+	// Test: GetEndpointByNameAny should still return the first match (primary)
+	endpointAny := manager.GetEndpointByNameAny("api-endpoint")
+	if endpointAny == nil {
+		t.Fatal("Expected to find endpoint by name (any), got nil")
+	}
+	if endpointAny.Config.Group != "primary" {
+		t.Errorf("Expected primary group endpoint (any search), got group: %s", endpointAny.Config.Group)
+	}
+
+	// Test: Put primary group in cooldown
+	manager.GetGroupManager().SetGroupCooldown("primary")
+
+	// Now GetEndpointByName should return backup endpoint
+	endpoint = manager.GetEndpointByName("api-endpoint")
+	if endpoint == nil {
+		t.Fatal("Expected to find backup endpoint by name after primary cooldown, got nil")
+	}
+	if endpoint.Config.Group != "backup" {
+		t.Errorf("Expected backup group endpoint after primary cooldown, got group: %s", endpoint.Config.Group)
+	}
+	if endpoint.Config.URL != "https://backup.example.com" {
+		t.Errorf("Expected backup URL, got: %s", endpoint.Config.URL)
+	}
+
+	// Test: GetEndpointByNameAny should still return first match (primary) regardless of cooldown
+	endpointAny = manager.GetEndpointByNameAny("api-endpoint")
+	if endpointAny == nil {
+		t.Fatal("Expected to find endpoint by name (any) after cooldown, got nil")
+	}
+	if endpointAny.Config.Group != "primary" {
+		t.Errorf("Expected primary group endpoint (any search) even after cooldown, got group: %s", endpointAny.Config.Group)
+	}
+}
+
+func TestGetEndpointByNameWithNoActiveGroups(t *testing.T) {
+	cfg := &config.Config{
+		Health: config.HealthConfig{
+			CheckInterval: 30 * time.Second,
+			Timeout:       5 * time.Second,
+			HealthPath:    "/v1/models",
+		},
+		Group: config.GroupConfig{
+			Cooldown: 10 * time.Minute,
+		},
+		Endpoints: []config.EndpointConfig{
+			{
+				Name:          "test-endpoint",
+				URL:           "https://test.example.com",
+				Group:         "testgroup",
+				GroupPriority: 1,
+				Priority:      1,
+				Token:         "test-token",
+				Timeout:       30 * time.Second,
+			},
+		},
+	}
+
+	manager := NewManager(cfg)
+
+	// Put the only group in cooldown
+	manager.GetGroupManager().SetGroupCooldown("testgroup")
+
+	// GetEndpointByName should return nil (no active groups)
+	endpoint := manager.GetEndpointByName("test-endpoint")
+	if endpoint != nil {
+		t.Errorf("Expected nil when no active groups, got endpoint: %s", endpoint.Config.Name)
+	}
+
+	// GetEndpointByNameAny should still return the endpoint
+	endpointAny := manager.GetEndpointByNameAny("test-endpoint")
+	if endpointAny == nil {
+		t.Fatal("Expected to find endpoint by name (any) even with no active groups, got nil")
+	}
+	if endpointAny.Config.Name != "test-endpoint" {
+		t.Errorf("Expected test-endpoint, got: %s", endpointAny.Config.Name)
+	}
+}

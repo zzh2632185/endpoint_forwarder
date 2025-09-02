@@ -306,8 +306,22 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 	return endpoints
 }
 
-// GetEndpointByName returns an endpoint by name
+// GetEndpointByName returns an endpoint by name, only from active groups
 func (m *Manager) GetEndpointByName(name string) *Endpoint {
+	// First filter by active groups
+	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(m.endpoints)
+	
+	// Then find by name
+	for _, endpoint := range activeEndpoints {
+		if endpoint.Config.Name == name {
+			return endpoint
+		}
+	}
+	return nil
+}
+
+// GetEndpointByNameAny returns an endpoint by name from all endpoints (ignoring group status)
+func (m *Manager) GetEndpointByNameAny(name string) *Endpoint {
 	for _, endpoint := range m.endpoints {
 		if endpoint.Config.Name == name {
 			return endpoint
