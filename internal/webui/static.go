@@ -15,23 +15,23 @@ const indexHTML = `<!DOCTYPE html>
             <h1>🚀 Claude EndPoints Forwarder WebUI</h1>
             <div class="header-controls">
                 <div class="status-bar">
-                    <span id="status-requests">Requests: 0</span>
-                    <span id="status-success">Success: 0.0%</span>
-                    <span id="status-connections">Connections: 0</span>
-                    <span id="last-update">Last Update: --:--:--</span>
+                    <span id="status-requests">请求数: 0</span>
+                    <span id="status-success">成功率: 0.0%</span>
+                    <span id="status-connections">连接数: 0</span>
+                    <span id="last-update">最后更新: --:--:--</span>
                 </div>
                 <div class="auth-controls">
-                    <a href="/logout" class="logout-btn" title="Logout">🚪</a>
+                    <a href="/logout" class="logout-btn" title="退出登录">🚪</a>
                 </div>
             </div>
         </header>
 
         <nav class="nav-tabs">
-            <button class="tab-button active" data-tab="overview">📊 Overview</button>
-            <button class="tab-button" data-tab="endpoints">🎯 Endpoints</button>
-            <button class="tab-button" data-tab="connections">🔌 Connections</button>
-            <button class="tab-button" data-tab="logs">📝 Logs</button>
-            <button class="tab-button" data-tab="config">⚙️ Config</button>
+            <button class="tab-button active" data-tab="overview">📊 概览</button>
+            <button class="tab-button" data-tab="endpoints">🎯 端点</button>
+            <button class="tab-button" data-tab="connections">🔌 连接</button>
+            <button class="tab-button" data-tab="logs">📝 日志</button>
+            <button class="tab-button" data-tab="config">⚙️ 配置</button>
         </nav>
 
         <main class="main-content">
@@ -42,41 +42,41 @@ const indexHTML = `<!DOCTYPE html>
                         <h3>📊 Request Metrics</h3>
                         <div id="metrics-content">
                             <div class="metric">
-                                <span class="label">Total Requests:</span>
+                                <span class="label">总请求数:</span>
                                 <span class="value" id="total-requests">0</span>
                             </div>
                             <div class="metric">
-                                <span class="label">Successful:</span>
+                                <span class="label">成功:</span>
                                 <span class="value success" id="successful-requests">0 (0.0%)</span>
                             </div>
                             <div class="metric">
-                                <span class="label">Failed:</span>
+                                <span class="label">失败:</span>
                                 <span class="value error" id="failed-requests">0 (0.0%)</span>
                             </div>
                             <div class="metric">
-                                <span class="label">Avg Response Time:</span>
+                                <span class="label">平均响应时间:</span>
                                 <span class="value" id="avg-response-time">0ms</span>
                             </div>
                             <div class="token-section">
-                                <h4>🪙 Token Usage</h4>
+                                <h4>🪙 令牌使用情况</h4>
                                 <div class="metric">
-                                    <span class="label">📥 Input Tokens:</span>
+                                    <span class="label">📥 输入令牌:</span>
                                     <span class="value" id="input-tokens">0</span>
                                 </div>
                                 <div class="metric">
-                                    <span class="label">📤 Output Tokens:</span>
+                                    <span class="label">📤 输出令牌:</span>
                                     <span class="value" id="output-tokens">0</span>
                                 </div>
                                 <div class="metric">
-                                    <span class="label">🆕 Cache Creation:</span>
+                                    <span class="label">🆕 缓存创建:</span>
                                     <span class="value" id="cache-creation-tokens">0</span>
                                 </div>
                                 <div class="metric">
-                                    <span class="label">📖 Cache Read:</span>
+                                    <span class="label">📖 缓存读取:</span>
                                     <span class="value" id="cache-read-tokens">0</span>
                                 </div>
                                 <div class="metric">
-                                    <span class="label">🔢 Total Tokens:</span>
+                                    <span class="label">🔢 总令牌数:</span>
                                     <span class="value highlight" id="total-tokens">0</span>
                                 </div>
                             </div>
@@ -87,20 +87,20 @@ const indexHTML = `<!DOCTYPE html>
                         <h3>🪙 Historical Token Usage</h3>
                         <div id="token-history-content">
                             <div id="token-chart" class="chart-area">
-                                <div class="loading">Loading token history...</div>
+                                <div class="loading">正在加载令牌历史...</div>
                             </div>
                             <div class="chart-legend">
                                 <div class="legend-item">
                                     <span class="legend-color input"></span>
-                                    <span class="legend-label">Input Tokens</span>
+                                    <span class="legend-label">输入令牌</span>
                                 </div>
                                 <div class="legend-item">
                                     <span class="legend-color output"></span>
-                                    <span class="legend-label">Output Tokens</span>
+                                    <span class="legend-label">输出令牌</span>
                                 </div>
                                 <div class="legend-item">
                                     <span class="legend-color cache"></span>
-                                    <span class="legend-label">Cache Tokens</span>
+                                    <span class="legend-label">缓存令牌</span>
                                 </div>
                             </div>
                         </div>
@@ -146,33 +146,33 @@ const indexHTML = `<!DOCTYPE html>
                         <div class="endpoints-header">
                             <h3 id="endpoints-title">🎯 Endpoints</h3>
                             <div class="endpoints-controls">
-                                <button id="edit-mode-btn" class="btn btn-primary">✏️ Edit Mode</button>
-                                <button id="save-config-btn" class="btn btn-success" style="display: none;">💾 Save</button>
-                                <button id="cancel-edit-btn" class="btn btn-secondary" style="display: none;">❌ Cancel</button>
+                                <button id="edit-mode-btn" class="btn btn-primary">✏️ 编辑模式</button>
+                                <button id="save-config-btn" class="btn btn-success" style="display: none;">💾 保存</button>
+                                <button id="cancel-edit-btn" class="btn btn-secondary" style="display: none;">❌ 取消</button>
                             </div>
                         </div>
                         <table id="endpoints-table">
                             <thead>
                                 <tr>
-                                    <th>Status</th>
-                                    <th>Name</th>
+                                    <th>状态</th>
+                                    <th>名称</th>
                                     <th>URL</th>
-                                    <th>Priority</th>
-                                    <th>Response Time</th>
-                                    <th>Requests</th>
+                                    <th>优先级</th>
+                                    <th>响应时间</th>
+                                    <th>请求数</th>
                                 </tr>
                             </thead>
                             <tbody id="endpoints-table-body">
                                 <tr>
-                                    <td colspan="6" class="placeholder">Loading endpoints...</td>
+                                    <td colspan="6" class="placeholder">正在加载端点...</td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
                     <div class="endpoint-details">
-                        <h3>📊 Details</h3>
+                        <h3>📊 详细信息</h3>
                         <div id="endpoint-details-content">
-                            <p class="placeholder">Select an endpoint to view details</p>
+                            <p class="placeholder">选择一个端点查看详细信息</p>
                         </div>
                     </div>
                 </div>
@@ -216,16 +216,16 @@ const indexHTML = `<!DOCTYPE html>
                     </div>
                     <div id="connections-list" class="connections-container">
                         <div class="connections-table-header">
-                            <div class="conn-col-client">Client IP</div>
-                            <div class="conn-col-method">Method</div>
-                            <div class="conn-col-path">Path</div>
-                            <div class="conn-col-endpoint">Endpoint</div>
-                            <div class="conn-col-group">Group</div>
-                            <div class="conn-col-retry">Retry</div>
-                            <div class="conn-col-duration">Duration</div>
+                            <div class="conn-col-client">客户端IP</div>
+                            <div class="conn-col-method">方法</div>
+                            <div class="conn-col-path">路径</div>
+                            <div class="conn-col-endpoint">端点</div>
+                            <div class="conn-col-group">分组</div>
+                            <div class="conn-col-retry">重试</div>
+                            <div class="conn-col-duration">持续时间</div>
                         </div>
                         <div id="connections-table-body">
-                            <div class="placeholder">No active connections</div>
+                            <div class="placeholder">无活动连接</div>
                         </div>
                     </div>
                 </div>
@@ -234,7 +234,7 @@ const indexHTML = `<!DOCTYPE html>
             <!-- Logs Tab -->
             <div id="logs" class="tab-content">
                 <div class="card">
-                    <h3>📝 System Logs</h3>
+                    <h3>📝 系统日志</h3>
                     <div id="logs-content">
                         <div class="log-entry">
                             <span class="log-time">--:--:--</span>
@@ -250,23 +250,23 @@ const indexHTML = `<!DOCTYPE html>
             <div id="config" class="tab-content">
                 <div class="config-grid">
                     <div class="card">
-                        <h3>🌐 Server</h3>
+                        <h3>🌐 服务器</h3>
                         <div id="config-server"></div>
                     </div>
                     <div class="card">
-                        <h3>🎯 Strategy</h3>
+                        <h3>🎯 策略</h3>
                         <div id="config-strategy"></div>
                     </div>
                     <div class="card">
-                        <h3>🔐 Authentication</h3>
+                        <h3>🔐 身份验证</h3>
                         <div id="config-auth"></div>
                     </div>
                     <div class="card">
-                        <h3>🖥️ Interface</h3>
+                        <h3>🖥️ 界面</h3>
                         <div id="config-interface"></div>
                     </div>
                     <div class="card full-width">
-                        <h3>🎯 Endpoints</h3>
+                        <h3>🎯 端点配置</h3>
                         <div id="config-endpoints"></div>
                     </div>
                     <div class="card full-width">
@@ -320,12 +320,14 @@ body {
     background: #0f172a;
     color: #e2e8f0;
     line-height: 1.6;
+    overflow-x: hidden;
 }
 
 .container {
     max-width: 1400px;
     margin: 0 auto;
     padding: 20px;
+    overflow-x: hidden;
 }
 
 .header {
@@ -909,7 +911,7 @@ tr:hover {
 
 .connections-table-header {
     display: grid;
-    grid-template-columns: 120px 60px 180px 100px 120px 80px 100px;
+    grid-template-columns: 1.2fr 0.6fr 1.8fr 1fr 1.2fr 0.8fr 1fr;
     gap: 10px;
     padding: 8px 0;
     border-bottom: 2px solid #334155;
@@ -923,7 +925,7 @@ tr:hover {
 
 .connection-row {
     display: grid;
-    grid-template-columns: 120px 60px 180px 100px 120px 80px 100px;
+    grid-template-columns: 1.2fr 0.6fr 1.8fr 1fr 1.2fr 0.8fr 1fr;
     gap: 10px;
     padding: 6px 10px;
     border-bottom: 1px solid #334155;
@@ -1240,7 +1242,7 @@ const loginHTML = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebUI Login - Claude EndPoints Forwarder</title>
+    <title>WebUI 登录 - Claude EndPoints Forwarder</title>
     <style>
         * {
             margin: 0;
@@ -1331,15 +1333,15 @@ const loginHTML = `<!DOCTYPE html>
 <body>
     <div class="login-container">
         <div class="login-header">
-            <h1>🚀 WebUI Login</h1>
+            <h1>🚀 WebUI 登录</h1>
             <p>Claude EndPoints Forwarder</p>
         </div>
         <form method="POST" action="/login">
             <div class="form-group">
-                <label for="password">Password:</label>
+                <label for="password">密码:</label>
                 <input type="password" id="password" name="password" required autofocus>
             </div>
-            <button type="submit" class="login-button">Login</button>
+            <button type="submit" class="login-button">登录</button>
         </form>
     </div>
 </body>
@@ -1351,7 +1353,7 @@ const loginHTMLWithError = `<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>WebUI Login - Claude EndPoints Forwarder</title>
+    <title>WebUI 登录 - Claude EndPoints Forwarder</title>
     <style>
         * {
             margin: 0;
@@ -1452,7 +1454,7 @@ const loginHTMLWithError = `<!DOCTYPE html>
 <body>
     <div class="login-container">
         <div class="login-header">
-            <h1>🚀 WebUI Login</h1>
+            <h1>🚀 WebUI 登录</h1>
             <p>Claude EndPoints Forwarder</p>
         </div>
         <div class="error-message">
@@ -1460,10 +1462,10 @@ const loginHTMLWithError = `<!DOCTYPE html>
         </div>
         <form method="POST" action="/login">
             <div class="form-group">
-                <label for="password">Password:</label>
+                <label for="password">密码:</label>
                 <input type="password" id="password" name="password" required autofocus>
             </div>
-            <button type="submit" class="login-button">Login</button>
+            <button type="submit" class="login-button">登录</button>
         </form>
     </div>
 </body>
@@ -2014,7 +2016,7 @@ class WebUIApp {
         } else {
             const div = document.createElement('div');
             div.className = 'history-item';
-            div.innerHTML = '<span class="history-placeholder">No connections with token usage yet...</span>';
+            div.innerHTML = '<span class="history-placeholder">暂无令牌使用记录...</span>';
             historyList.appendChild(div);
         }
     }
@@ -2028,7 +2030,7 @@ class WebUIApp {
         } catch (error) {
             console.error('Error loading token history:', error);
             document.getElementById('token-chart').innerHTML =
-                '<div style="color: #ef4444; text-align: center; padding: 20px;">Failed to load token history</div>';
+                '<div style="color: #ef4444; text-align: center; padding: 20px;">加载令牌历史失败</div>';
         }
     }
 
@@ -2055,7 +2057,7 @@ class WebUIApp {
         }
 
         // Chart header
-        chartHtml += '<div style="color: #60a5fa; margin-bottom: 10px; text-align: center;">Token Usage Over Time</div>';
+        chartHtml += '<div style="color: #60a5fa; margin-bottom: 10px; text-align: center;">令牌使用时间趋势</div>';
 
         // Simple bar chart
         displayData.forEach((point, index) => {
@@ -2154,7 +2156,7 @@ class WebUIApp {
         const detailsContent = document.getElementById('endpoint-details-content');
 
         // Show loading state
-        detailsContent.innerHTML = '<div class="loading">Loading endpoint details...</div>';
+        detailsContent.innerHTML = '<div class="loading">正在加载端点详情...</div>';
 
         try {
             // Fetch detailed endpoint information from new API
@@ -2334,7 +2336,7 @@ class WebUIApp {
                 // Show "No active connections" message
                 const emptyRow = document.createElement('div');
                 emptyRow.className = 'connection-row';
-                emptyRow.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: #64748b; font-style: italic;">No active connections</div>';
+                emptyRow.innerHTML = '<div style="grid-column: 1 / -1; text-align: center; color: #64748b; font-style: italic;">无活动连接</div>';
                 connectionsTableBody.appendChild(emptyRow);
 
                 // Fill remaining rows
@@ -2419,14 +2421,14 @@ class WebUIApp {
                 });
             } else {
                 const div = document.createElement('div');
-                div.innerHTML = '<p class="placeholder">No logs available yet...</p>';
+                div.innerHTML = '<p class="placeholder">暂无日志...</p>';
                 logsContent.appendChild(div);
             }
 
         } catch (error) {
             console.error('Error loading logs:', error);
             const logsContent = document.getElementById('logs-content');
-            logsContent.innerHTML = '<p class="placeholder" style="color: #ef4444;">Error loading logs: ' + error.message + '</p>';
+            logsContent.innerHTML = '<p class="placeholder" style="color: #ef4444;">加载日志失败: ' + error.message + '</p>';
         }
     }
 
