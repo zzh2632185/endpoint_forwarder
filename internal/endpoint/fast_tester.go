@@ -23,10 +23,11 @@ type FastTestResult struct {
 
 // FastTester performs quick parallel tests on endpoints
 type FastTester struct {
-	config     *config.Config
-	client     *http.Client
+	config      *config.Config
+	client      *http.Client
 	resultCache map[string]*FastTestResult
 	cacheMutex  sync.RWMutex
+	manager     *Manager // Reference to manager for dynamic token resolution
 }
 
 // NewFastTester creates a new fast tester
@@ -47,6 +48,11 @@ func NewFastTester(cfg *config.Config) *FastTester {
 		},
 		resultCache: make(map[string]*FastTestResult),
 	}
+}
+
+// SetManager sets the manager reference for dynamic token resolution
+func (ft *FastTester) SetManager(manager *Manager) {
+	ft.manager = manager
 }
 
 // TestEndpointsParallel performs parallel testing on all healthy endpoints
@@ -126,9 +132,17 @@ func (ft *FastTester) testSingleEndpoint(ctx context.Context, endpoint *Endpoint
 		}
 	}
 
-	// Add authorization if configured
-	if endpoint.Config.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+endpoint.Config.Token)
+	// Add authorization with dynamically resolved token
+	var token string
+	if ft.manager != nil {
+		token = ft.manager.GetTokenForEndpoint(endpoint)
+	} else {
+		// Fallback to endpoint's own token if manager is not available
+		token = endpoint.Config.Token
+	}
+	
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	// Add custom headers

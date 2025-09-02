@@ -152,8 +152,7 @@ jobs:
         prerelease: false
         generate_release_notes: true
         body: |
-          ## Endpoint Forwarder ${{ github.ref_name }}
-
+          ## Claude EndPoints Forwarder ${{ github.ref_name }}
           ### 📦 下载说明
 
           下载Linux AMD64版本：

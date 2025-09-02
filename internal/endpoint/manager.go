@@ -78,6 +78,9 @@ func NewManager(cfg *config.Config) *Manager {
 		manager.endpoints = append(manager.endpoints, endpoint)
 	}
 
+	// Set manager reference in fast tester for dynamic token resolution
+	manager.fastTester.SetManager(manager)
+
 	// Initialize groups from endpoints
 	manager.groupManager.UpdateGroups(manager.endpoints)
 
@@ -330,8 +333,22 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 	return endpoints
 }
 
-// GetEndpointByName returns an endpoint by name
+// GetEndpointByName returns an endpoint by name, only from active groups
 func (m *Manager) GetEndpointByName(name string) *Endpoint {
+	// First filter by active groups
+	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(m.endpoints)
+	
+	// Then find by name
+	for _, endpoint := range activeEndpoints {
+		if endpoint.Config.Name == name {
+			return endpoint
+		}
+	}
+	return nil
+}
+
+// GetEndpointByNameAny returns an endpoint by name from all endpoints (ignoring group status)
+func (m *Manager) GetEndpointByNameAny(name string) *Endpoint {
 	for _, endpoint := range m.endpoints {
 		if endpoint.Config.Name == name {
 			return endpoint
@@ -343,6 +360,70 @@ func (m *Manager) GetEndpointByName(name string) *Endpoint {
 // GetAllEndpoints returns all endpoints
 func (m *Manager) GetAllEndpoints() []*Endpoint {
 	return m.endpoints
+}
+
+// GetTokenForEndpoint dynamically resolves the token for an endpoint
+// If the endpoint has its own token, return it
+// If not, find the first endpoint in the same group that has a token
+func (m *Manager) GetTokenForEndpoint(ep *Endpoint) string {
+	// 1. If endpoint has its own token, use it directly
+	if ep.Config.Token != "" {
+		return ep.Config.Token
+	}
+	
+	// 2. Find the first endpoint in the same group that has a token
+	groupName := ep.Config.Group
+	if groupName == "" {
+		groupName = "Default"
+	}
+	
+	// Search through all endpoints for the same group
+	for _, endpoint := range m.endpoints {
+		endpointGroup := endpoint.Config.Group
+		if endpointGroup == "" {
+			endpointGroup = "Default"
+		}
+		
+		// If same group and has token, return it
+		if endpointGroup == groupName && endpoint.Config.Token != "" {
+			return endpoint.Config.Token
+		}
+	}
+	
+	// 3. No token found in the group
+	return ""
+}
+
+// GetApiKeyForEndpoint dynamically resolves the API key for an endpoint
+// If the endpoint has its own api-key, return it
+// If not, find the first endpoint in the same group that has an api-key
+func (m *Manager) GetApiKeyForEndpoint(ep *Endpoint) string {
+	// 1. If endpoint has its own api-key, use it directly
+	if ep.Config.ApiKey != "" {
+		return ep.Config.ApiKey
+	}
+	
+	// 2. Find the first endpoint in the same group that has an api-key
+	groupName := ep.Config.Group
+	if groupName == "" {
+		groupName = "Default"
+	}
+	
+	// Search through all endpoints for the same group
+	for _, endpoint := range m.endpoints {
+		endpointGroup := endpoint.Config.Group
+		if endpointGroup == "" {
+			endpointGroup = "Default"
+		}
+		
+		// If same group and has api-key, return it
+		if endpointGroup == groupName && endpoint.Config.ApiKey != "" {
+			return endpoint.Config.ApiKey
+		}
+	}
+	
+	// 3. No api-key found in the group
+	return ""
 }
 
 // GetConfig returns the manager's configuration
@@ -423,9 +504,10 @@ func (m *Manager) checkEndpointHealth(endpoint *Endpoint) {
 		return
 	}
 
-	// Add authorization header if token is configured
-	if endpoint.Config.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+endpoint.Config.Token)
+	// Add authorization header with dynamically resolved token
+	token := m.GetTokenForEndpoint(endpoint)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
 	}
 
 	resp, err := m.client.Do(req)

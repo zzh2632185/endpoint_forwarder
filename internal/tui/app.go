@@ -256,15 +256,28 @@ func (t *TUIApp) getSelectedEndpointName() string {
 		return ""
 	}
 	
-	endpoints := t.endpointManager.GetAllEndpoints()
-	selectedRow := t.endpointsView.selectedRow
-	
-	// selectedRow is 1-based (0 is header), convert to 0-based endpoint index
-	if selectedRow > 0 && selectedRow <= len(endpoints) {
-		return endpoints[selectedRow-1].Config.Name
+	// Use the groupRowMap to get the correct endpoint for the selected row
+	rowInfo, exists := t.endpointsView.groupRowMap[t.endpointsView.selectedRow]
+	if !exists || rowInfo.IsGroupHeader || rowInfo.Endpoint == nil {
+		return "" // Selected row is a group header or invalid
 	}
 	
-	return ""
+	return rowInfo.Endpoint.Config.Name
+}
+
+// getSelectedEndpoint returns the selected endpoint object with group context
+func (t *TUIApp) getSelectedEndpoint() *endpoint.Endpoint {
+	if t.endpointsView == nil {
+		return nil
+	}
+	
+	// Use the groupRowMap to get the correct endpoint for the selected row
+	rowInfo, exists := t.endpointsView.groupRowMap[t.endpointsView.selectedRow]
+	if !exists || rowInfo.IsGroupHeader || rowInfo.Endpoint == nil {
+		return nil // Selected row is a group header or invalid
+	}
+	
+	return rowInfo.Endpoint
 }
 
 // switchToTab switches to the specified tab
@@ -439,8 +452,14 @@ func (t *TUIApp) EnterEditMode() {
 	t.isDirty = false
 	
 	// Initialize temp priorities with current config values
+	// Use endpoint@group keys for same-name endpoints
 	for _, endpoint := range t.cfg.Endpoints {
-		t.tempPriorities[endpoint.Name] = endpoint.Priority
+		groupName := endpoint.Group
+		if groupName == "" {
+			groupName = "Default"
+		}
+		endpointKey := fmt.Sprintf("%s@%s", endpoint.Name, groupName)
+		t.tempPriorities[endpointKey] = endpoint.Priority
 	}
 	
 	// Add log entry
@@ -488,19 +507,57 @@ func (t *TUIApp) SetEndpointPriority(endpointName string, priority int) {
 		return
 	}
 	
-	oldPriority := t.tempPriorities[endpointName]
-	t.tempPriorities[endpointName] = priority
+	// Get the selected endpoint to determine its group context
+	selectedEndpoint := t.getSelectedEndpoint()
+	if selectedEndpoint == nil {
+		t.AddLog("WARN", "未选中有效的端点", "TUI")
+		return
+	}
+	
+	// Create unique key using endpoint name and group for same-name endpoints
+	groupName := selectedEndpoint.Config.Group
+	if groupName == "" {
+		groupName = "Default"
+	}
+	endpointKey := fmt.Sprintf("%s@%s", endpointName, groupName)
+	
+	oldPriority := t.tempPriorities[endpointKey]
+	if oldPriority == 0 {
+		// Get original priority from config
+		oldPriority = selectedEndpoint.Config.Priority
+	}
+	
+	t.tempPriorities[endpointKey] = priority
 	t.isDirty = true
 	
-	t.AddLog("INFO", fmt.Sprintf("端点 %s 优先级: %d -> %d", endpointName, oldPriority, priority), "TUI")
+	t.AddLog("INFO", fmt.Sprintf("端点 %s (组: %s) 优先级: %d -> %d", 
+		endpointName, groupName, oldPriority, priority), "TUI")
 }
 
 // GetEffectivePriority returns the effective priority for an endpoint (temp or config)
+// For same-name endpoints, we need the group context to get the right endpoint
 func (t *TUIApp) GetEffectivePriority(endpointName string) int {
 	t.editMutex.RLock()
 	defer t.editMutex.RUnlock()
 	
 	if t.editMode {
+		// Try to find the priority in temp priorities using different possible keys
+		// First, try to find by endpoint object if we have group context
+		for _, endpoint := range t.cfg.Endpoints {
+			if endpoint.Name == endpointName {
+				groupName := endpoint.Group
+				if groupName == "" {
+					groupName = "Default"
+				}
+				endpointKey := fmt.Sprintf("%s@%s", endpointName, groupName)
+				
+				if priority, exists := t.tempPriorities[endpointKey]; exists {
+					return priority
+				}
+			}
+		}
+		
+		// Fallback to simple name lookup (for backward compatibility)
 		if priority, exists := t.tempPriorities[endpointName]; exists {
 			return priority
 		}
@@ -514,6 +571,31 @@ func (t *TUIApp) GetEffectivePriority(endpointName string) int {
 	}
 	
 	return 999 // Default high priority if not found
+}
+
+// GetEffectivePriorityForEndpoint returns the effective priority for a specific endpoint object
+func (t *TUIApp) GetEffectivePriorityForEndpoint(endpoint *endpoint.Endpoint) int {
+	t.editMutex.RLock()
+	defer t.editMutex.RUnlock()
+	
+	if t.editMode {
+		groupName := endpoint.Config.Group
+		if groupName == "" {
+			groupName = "Default"
+		}
+		endpointKey := fmt.Sprintf("%s@%s", endpoint.Config.Name, groupName)
+		
+		if priority, exists := t.tempPriorities[endpointKey]; exists {
+			return priority
+		}
+		
+		// Fallback to simple name lookup
+		if priority, exists := t.tempPriorities[endpoint.Config.Name]; exists {
+			return priority
+		}
+	}
+	
+	return endpoint.Config.Priority
 }
 
 // HasUnsavedChanges returns whether there are unsaved changes
@@ -539,9 +621,19 @@ func (t *TUIApp) SavePrioritiesToConfig() error {
 	
 	// Apply temp priorities to the config
 	for i := range t.cfg.Endpoints {
-		endpointName := t.cfg.Endpoints[i].Name
-		if newPriority, exists := t.tempPriorities[endpointName]; exists {
-			t.cfg.Endpoints[i].Priority = newPriority
+		endpoint := &t.cfg.Endpoints[i]
+		groupName := endpoint.Group
+		if groupName == "" {
+			groupName = "Default"
+		}
+		endpointKey := fmt.Sprintf("%s@%s", endpoint.Name, groupName)
+		
+		if newPriority, exists := t.tempPriorities[endpointKey]; exists {
+			endpoint.Priority = newPriority
+		}
+		// Also check for simple name key for backward compatibility
+		if newPriority, exists := t.tempPriorities[endpoint.Name]; exists {
+			endpoint.Priority = newPriority
 		}
 	}
 	
@@ -563,4 +655,25 @@ func (t *TUIApp) SavePrioritiesToConfig() error {
 	t.isDirty = false
 	
 	return nil
+}
+
+// UpdateConfig updates the TUI configuration when config is reloaded
+func (t *TUIApp) UpdateConfig(newCfg *config.Config) {
+	t.editMutex.Lock()
+	defer t.editMutex.Unlock()
+	
+	// Update configuration
+	oldCfg := t.cfg
+	t.cfg = newCfg
+	
+	// Clear temporary priorities when config changes to prevent stale data
+	t.tempPriorities = make(map[string]int)
+	t.isDirty = false
+	
+	// Update endpoint manager with new config
+	t.endpointManager.UpdateConfig(newCfg)
+	
+	// Log configuration update
+	t.AddLog("INFO", fmt.Sprintf("配置已重载 - 端点数量: %d -> %d", 
+		len(oldCfg.Endpoints), len(newCfg.Endpoints)), "CONFIG")
 }

@@ -90,57 +90,81 @@ proxy:
   # password: "proxy_pass"    # 代理密码
 
 # 端点配置
+# ==================== 组密钥配置说明 ====================
+# 每个组的第一个端点应该定义该组使用的 token 和 api-key
+# 组内其他端点如果没有定义 token/api-key，会自动使用组内第一个端点的密钥
+# 如果某个端点需要使用不同的密钥，可以显式指定 token/api-key 来覆盖组默认值
+# ========================================================
+
 endpoints:
-  # 主要组端点 - 其他端点会继承此端点的 token 和 headers (如果未指定)
+  # ============ 主要组 (main) ============
+  # 组定义端点 - 定义整个 main 组使用的密钥
   - name: "primary"
     url: "https://api.openai.com"
-    group: "main"            # 组名，用于分组管理
-    group-priority: 1        # 组优先级 (数字越小优先级越高)
-    priority: 1              # 组内优先级 (数字越小优先级越高)
-    timeout: "300s"           # 请求超时时间，如果不设置则使用 global_timeout
-    token: "sk-your-openai-api-key"  # API 密钥 (用于 Authorization 头)
-    api-key: "your-api-key-value"    # API 密钥 (用于 X-Api-Key 头)
-    headers:                 # 自定义请求头
+    group: "main"                          # 组名
+    group-priority: 1                      # 组优先级 (数字越小优先级越高)
+    priority: 1                            # 组内优先级 (数字越小优先级越高)
+    timeout: "300s"
+    token: "sk-your-openai-api-key"        # 🔑 此密钥会被同组其他端点共享
+    api-key: "your-api-key-value"          # 🔑 此API密钥会被同组其他端点共享
+    headers:
       User-Agent: "Claude-Request-Forwarder/1.0"
       X-Custom-Header: "custom-value"
 
-  # 主要组备用端点 - 会继承主要端点的 token、api-key、headers 和组设置
+  # 主要组备用端点 - 自动使用 main 组的密钥
   - name: "primary_backup"
     url: "https://api.anthropic.com"
-    priority: 2              # 组内优先级 2
+    priority: 2                            # 组内优先级 2
     timeout: "300s"
-    # group: "main" (继承自上一个端点)
-    # group-priority: 1 (继承自上一个端点)
-    # token、api-key 和 headers 会从第一个端点继承
+    # 🔄 自动继承: group: "main", group-priority: 1
+    # 🔑 自动使用 main 组的密钥: token 和 api-key 会动态解析为 primary 端点的值
+    # 📋 headers 继承自 primary 端点
 
-  # 备用组端点 - 使用不同的组设置
+  # ============ 备用组 (backup) ============
+  # 组定义端点 - 定义整个 backup 组使用的密钥
   - name: "backup1"
     url: "https://api.example.com"
-    group: "backup"          # 新的组名
-    group-priority: 2        # 备用组优先级
-    priority: 1              # 组内优先级
+    group: "backup"                        # 新的组名
+    group-priority: 2                      # 备用组优先级
+    priority: 1                            # 组内优先级
     timeout: "300s"
-    token: "sk-different-api-key"  # 覆盖继承的 token
-    api-key: "different-api-key"    # 覆盖继承的 api-key
+    token: "sk-backup-group-api-key"       # 🔑 此密钥会被同组其他端点共享
+    api-key: "backup-group-api-key"        # 🔑 此API密钥会被同组其他端点共享
     headers:
       Authorization: "Bearer custom-token"
       X-API-Version: "2024-01"
-      # 其他 headers 仍会从第一个端点继承并与此处合并
 
-  # 备用组的第二个端点 - 继承备用组设置
+  # 备用组的第二个端点 - 自动使用 backup 组的密钥
   - name: "backup2"
     url: "https://api.backup2.com"
-    priority: 2              # 组内优先级 2
+    priority: 2                            # 组内优先级 2
     timeout: "300s"
-    # group: "backup" (继承自上一个端点)
-    # group-priority: 2 (继承自上一个端点)
-    # 其他设置继承自backup1端点
+    # 🔄 自动继承: group: "backup", group-priority: 2
+    # 🔑 自动使用 backup 组的密钥: 会动态解析为 backup1 端点的密钥
 
-  # 本地端点组
+  # 备用组的第三个端点 - 使用自定义密钥覆盖组默认值
+  - name: "backup3"
+    url: "https://api.backup3.com"
+    priority: 3                            # 组内优先级 3
+    timeout: "300s"
+    token: "sk-custom-override-key"        # 🔑 覆盖组默认密钥，只有这个端点使用此密钥
+    # 🔄 group 和 group-priority 仍然继承自 backup 组
+    # 🔑 api-key 仍然使用组默认值 (backup1 的 api-key)
+
+  # ============ 本地组 (local) ============
+  # 本地服务组 - 通常不需要密钥
   - name: "local"
     url: "http://localhost:11434"
-    group: "local"           # 本地组
-    group-priority: 3        # 最低组优先级
-    priority: 1              # 组内优先级
+    group: "local"                         # 本地组
+    group-priority: 3                      # 最低组优先级
+    priority: 1                            # 组内优先级
     timeout: "300s"
-    # 本地服务通常不需要 token
+    # 🔓 本地服务通常不需要 token 和 api-key
+
+  # 本地组备用端点
+  - name: "local_backup"
+    url: "http://localhost:8080"
+    priority: 2                            # 组内优先级 2
+    timeout: "300s"
+    # 🔄 自动继承: group: "local", group-priority: 3
+    # 🔓 无密钥配置，适用于本地服务

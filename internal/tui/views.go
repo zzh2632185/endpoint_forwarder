@@ -322,7 +322,8 @@ func NewEndpointsView(monitoringMiddleware *middleware.MonitoringMiddleware, end
 }
 
 func (v *EndpointsView) setupUI() {
-	v.table = tview.NewTable().SetBorders(true).SetSelectable(true, false)
+	v.table = tview.NewTable().SetBorders(true).SetSelectable(true, false).
+		SetFixed(1, 0) // Fix the header row (row 0) so it stays visible when scrolling
 	
 	// Update table title based on edit mode
 	v.updateTableTitle()
@@ -348,7 +349,7 @@ func (v *EndpointsView) setupUI() {
 
 // setupTableHeaders sets up the fixed table headers
 func (v *EndpointsView) setupTableHeaders() {
-	headers := []string{"Status", "Name", "URL", "Priority", "Resp", "Reqs", "Fails"}
+	headers := []string{"Status", "Name", "Priority", "Resp", "Reqs", "Fails"}
 	
 	for col, header := range headers {
 		cell := tview.NewTableCell(fmt.Sprintf("[white::b]%s[white::-]", header)).
@@ -356,8 +357,8 @@ func (v *EndpointsView) setupTableHeaders() {
 			SetAlign(tview.AlignLeft).
 			SetSelectable(false)
 		
-		// Only URL column should expand
-		if col == 2 { // URL column
+		// Only Priority column should expand
+		if col == 2 { // Priority column
 			cell.SetExpansion(1)
 		}
 		
@@ -492,10 +493,10 @@ func (v *EndpointsView) addGroupHeaderRow(row int, group *endpoint.GroupInfo, gr
 		groupStatusText = fmt.Sprintf("Cooldown %ds", int(remaining.Seconds()))
 		groupColor = "[red::b]"
 	} else if group.IsActive {
-		groupStatusText = "Active"
+		groupStatusText = "🟢"
 		groupColor = "[green::b]"
 	} else {
-		groupStatusText = "Standby"
+		groupStatusText = "⚫"
 		groupColor = "[gray::b]"
 	}
 	
@@ -503,7 +504,7 @@ func (v *EndpointsView) addGroupHeaderRow(row int, group *endpoint.GroupInfo, gr
 	groupLine1 := fmt.Sprintf("%s %s P%d[white::-]", groupColor, group.Name, group.Priority)
 	groupLine2 := fmt.Sprintf("%s %s %d/%d[white::-]", groupColor, groupStatusText, healthyCount, len(groupEndpoints))
 	
-	// Set group header cell spanning first 3 columns (Status, Name, URL) with multi-line content
+	// Set group header cell spanning first 2 columns (Status, Name) with multi-line content
 	groupHeaderText := fmt.Sprintf("%s\n%s", groupLine1, groupLine2)
 	
 	cell := tview.NewTableCell(groupHeaderText).
@@ -515,7 +516,7 @@ func (v *EndpointsView) addGroupHeaderRow(row int, group *endpoint.GroupInfo, gr
 	v.table.SetCell(row, 0, cell)
 	
 	// Fill remaining columns with empty cells to maintain table structure
-	for col := 1; col < 7; col++ {
+	for col := 1; col < 6; col++ {
 		emptyCell := tview.NewTableCell("").
 			SetSelectable(false)
 		v.table.SetCell(row, col, emptyCell)
@@ -542,7 +543,7 @@ func (v *EndpointsView) addEndpointRow(row int, ep *endpoint.Endpoint, metrics *
 	// Get effective priority (temp or config)
 	effectivePriority := ep.Config.Priority
 	if v.tuiApp != nil {
-		effectivePriority = v.tuiApp.GetEffectivePriority(ep.Config.Name)
+		effectivePriority = v.tuiApp.GetEffectivePriorityForEndpoint(ep)
 	}
 	
 	// Check if this is the highest priority endpoint in the group
@@ -562,7 +563,7 @@ func (v *EndpointsView) addEndpointRow(row int, ep *endpoint.Endpoint, metrics *
 				epGroupName = "Default"
 			}
 			if epGroupName == groupName {
-				priority := v.tuiApp.GetEffectivePriority(endpoint.Config.Name)
+				priority := v.tuiApp.GetEffectivePriorityForEndpoint(endpoint)
 				if priority < minPriority {
 					minPriority = priority
 				}
@@ -587,7 +588,6 @@ func (v *EndpointsView) addEndpointRow(row int, ep *endpoint.Endpoint, metrics *
 	cells := []string{
 		fmt.Sprintf("  %s", statusIcon),                                    // Indented status
 		fmt.Sprintf("  %s", truncateString(ep.Config.Name, 10)),           // Indented name (shorter)
-		truncateString(ep.Config.URL, 25),                                 // URL (shorter)
 		priorityText,                                                      // Priority
 		fmt.Sprintf("%dms", status.ResponseTime.Milliseconds()),           // Response time
 		fmt.Sprintf("%d", totalReqs),                                      // Requests
@@ -852,7 +852,7 @@ func (v *ConnectionsView) Update() {
 			endpointDisplay = "pending"
 		} else {
 			// Find the group for this endpoint
-			endpoint := v.endpointManager.GetEndpointByName(endpointDisplay)
+			endpoint := v.endpointManager.GetEndpointByNameAny(endpointDisplay)
 			if endpoint != nil {
 				if endpoint.Config.Group != "" {
 					groupName = endpoint.Config.Group

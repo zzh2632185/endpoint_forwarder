@@ -164,10 +164,14 @@ func main() {
 
 		// Update auth middleware
 		authMiddleware.UpdateConfig(newCfg.Auth)
-
 		// Update WebUI server
 		if webUIServer != nil {
 			webUIServer.UpdateConfig(newCfg)
+		}
+
+		// Update TUI if enabled
+		if tuiApp != nil {
+			tuiApp.UpdateConfig(newCfg)
 		}
 
 		if !tuiEnabled {
