@@ -65,7 +65,7 @@ go test ./internal/middleware
 
 - **Primary config**: `config/config.yaml` (copy from `config/example.yaml`)
 - **Hot-reloading**: Automatic configuration reload via fsnotify with 500ms debounce
-- **Inheritance**: Subsequent endpoints inherit `token`, `api-key`, `timeout`, and `headers` from first endpoint
+- **Dynamic Token Resolution**: Tokens and API keys are resolved dynamically at runtime for group-based failover
 - **Global timeout**: Default timeout for all non-streaming requests (5 minutes)
 - **API Key support**: Endpoints can specify `api-key` field which is automatically passed as `X-Api-Key` header
 
@@ -87,33 +87,48 @@ The system supports endpoint grouping with automatic failover and cooldown mecha
 
 **Group Inheritance Rules**:
 - Endpoints inherit `group` and `group-priority` from previous endpoints if not specified
-- First endpoint in a group defines the inherited settings for subsequent endpoints in same group
+- Static inheritance: `timeout` and `headers` are inherited during configuration parsing
+- Dynamic resolution: `token` and `api-key` are resolved at runtime from the first endpoint in the same group
 - Groups can be mixed and matched with different priorities for failover scenarios
+
+**Dynamic Token Resolution**:
+- **Runtime Resolution**: Tokens and API keys are not inherited during config parsing but resolved dynamically at request time
+- **Group-based Sharing**: All endpoints in a group share the token/api-key from the first endpoint that defines it
+- **Override Support**: Individual endpoints can override group tokens by explicitly specifying their own `token` or `api-key`
+- **Failover-friendly**: When groups switch during failover, the new active group's tokens are automatically used
 
 **Example Group Configuration**:
 ```yaml
 endpoints:
-  # Primary group (highest priority)
+  # Primary group (highest priority) - defines group token
   - name: "primary"
     url: "https://api.openai.com"
     group: "main"
     group-priority: 1
     priority: 1
-    token: "sk-your-api-key"
+    token: "sk-main-group-token"        # 🔑 Shared by all main group endpoints
     
-  # Backup for primary group
+  # Backup for primary group - uses main group token
   - name: "primary_backup"
     url: "https://api.anthropic.com"
     priority: 2
-    # Inherits group: "main" and group-priority: 1
+    # 🔄 Inherits group: "main" and group-priority: 1
+    # 🔑 Uses main group token dynamically at runtime
     
-  # Secondary group (lower priority)
+  # Secondary group (lower priority) - defines different group token
   - name: "secondary"
     url: "https://api.example.com"
     group: "backup"
     group-priority: 2
     priority: 1
-    token: "sk-different-api-key"
+    token: "sk-backup-group-token"      # 🔑 Shared by all backup group endpoints
+    
+  # Custom override within backup group
+  - name: "secondary_special"
+    url: "https://api.special.com"
+    priority: 2
+    token: "sk-special-override"        # 🔑 Overrides backup group token
+    # 🔄 Still inherits group: "backup" and group-priority: 2
 ```
 
 ## Testing Approach
