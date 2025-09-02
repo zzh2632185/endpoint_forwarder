@@ -1,0 +1,21 @@
+configs:
+    - name: config
+      file_path: config\config.yaml
+      description: 'Configuration: config'
+      created_at: 2025-09-02T22:48:15.8013634+09:00
+      updated_at: 2025-09-02T23:55:51.2106944+09:00
+      is_active: false
+    - name: RR
+      file_path: config\configRR.yaml
+      description: 'Configuration: RR'
+      created_at: 2025-09-02T22:48:15.801915+09:00
+      updated_at: 2025-09-02T23:55:51.2106944+09:00
+      is_active: true
+    - name: example
+      file_path: config\example.yaml
+      description: 'Configuration: example'
+      created_at: 2025-09-02T22:48:15.8024591+09:00
+      updated_at: 2025-09-02T23:55:51.2112238+09:00
+      is_active: false
+active_config: RR
+last_updated: 2025-09-02T23:56:12.9885593+09:00

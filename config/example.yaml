@@ -64,6 +64,13 @@ tui:
   update_interval: "1s"       # TUI刷新间隔，默认: 1s
   save_priority_edits: false  # 是否在TUI中保存优先级编辑到配置文件，默认: false（当前情况下保存配置文件可能会自动格式化配置文件）
 
+# WebUI界面配置 - 浏览器访问的Web监控界面
+webui:
+  enabled: false              # 启用WebUI界面，默认: false
+  host: "127.0.0.1"          # WebUI监听地址，默认: 127.0.0.1
+  port: 8003                  # WebUI监听端口，默认: 8003
+  password: ""                # WebUI访问密码，如果为空则不需要鉴权
+
 # 代理配置 (可选)
 proxy:
   enabled: false              # 是否启用代理

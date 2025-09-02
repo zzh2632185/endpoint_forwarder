@@ -55,7 +55,7 @@ func NewManager(cfg *config.Config) *Manager {
 	}
 
 	manager := &Manager{
-		config:       cfg,
+		config: cfg,
 		client: &http.Client{
 			Timeout:   cfg.Health.Timeout,
 			Transport: httpTransport,
@@ -129,6 +129,10 @@ func (m *Manager) UpdateConfig(cfg *config.Config) {
 			Timeout:   cfg.Health.Timeout,
 		}
 	}
+
+	// Immediately perform health checks on new endpoints to get real status
+	slog.Info("🔄 配置更新后立即执行健康检查")
+	m.performHealthChecks()
 }
 
 // GetHealthyEndpoints returns a list of healthy endpoints from active groups based on strategy

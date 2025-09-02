@@ -5,12 +5,31 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/fsnotify/fsnotify"
 	"gopkg.in/yaml.v3"
 )
+
+// ConfigMetadata represents metadata for a configuration
+type ConfigMetadata struct {
+	Name        string    `json:"name" yaml:"name"`               // 配置名称
+	FilePath    string    `json:"filePath" yaml:"file_path"`      // 配置文件路径
+	Description string    `json:"description" yaml:"description"` // 配置描述
+	CreatedAt   time.Time `json:"createdAt" yaml:"created_at"`    // 创建时间
+	UpdatedAt   time.Time `json:"updatedAt" yaml:"updated_at"`    // 更新时间
+	IsActive    bool      `json:"isActive" yaml:"is_active"`      // 是否为当前活动配置
+}
+
+// ConfigRegistry manages multiple configurations
+type ConfigRegistry struct {
+	Configs      []ConfigMetadata `json:"configs" yaml:"configs"`
+	ActiveConfig string           `json:"activeConfig" yaml:"active_config"`
+	LastUpdated  time.Time        `json:"lastUpdated" yaml:"last_updated"`
+	mutex        sync.RWMutex     `json:"-" yaml:"-"`
+}
 
 type Config struct {
 	Server        ServerConfig     `yaml:"server"`
@@ -19,7 +38,7 @@ type Config struct {
 	Health        HealthConfig     `yaml:"health"`
 	Logging       LoggingConfig    `yaml:"logging"`
 	Streaming     StreamingConfig  `yaml:"streaming"`
-	Group         GroupConfig      `yaml:"group"`        // Group configuration
+	Group         GroupConfig      `yaml:"group"` // Group configuration
 	Proxy         ProxyConfig      `yaml:"proxy"`
 	Auth          AuthConfig       `yaml:"auth"`
 	TUI           TUIConfig        `yaml:"tui"`            // TUI configuration
@@ -99,9 +118,10 @@ type TUIConfig struct {
 }
 
 type WebUIConfig struct {
-	Enabled bool   `yaml:"enabled"` // Enable WebUI interface, default: false
-	Host    string `yaml:"host"`    // WebUI host, default: "127.0.0.1"
-	Port    int    `yaml:"port"`    // WebUI port, default: 8003
+	Enabled  bool   `yaml:"enabled"`  // Enable WebUI interface, default: false
+	Host     string `yaml:"host"`     // WebUI host, default: "127.0.0.1"
+	Port     int    `yaml:"port"`     // WebUI port, default: 8003
+	Password string `yaml:"password"` // WebUI access password, if empty no authentication required
 }
 
 type EndpointConfig struct {
@@ -242,8 +262,8 @@ func (c *Config) setDefaults() {
 	}
 
 	// Handle group inheritance - endpoints inherit group settings from previous endpoint
-	var currentGroup string = "Default"       // Default group name
-	var currentGroupPriority int = 1          // Default group priority
+	var currentGroup string = "Default" // Default group name
+	var currentGroupPriority int = 1    // Default group priority
 
 	for i := range c.Endpoints {
 		// Handle group inheritance - check if this endpoint defines a new group
@@ -258,7 +278,7 @@ func (c *Config) setDefaults() {
 			c.Endpoints[i].Group = currentGroup
 			c.Endpoints[i].GroupPriority = currentGroupPriority
 		}
-		
+
 		// If GroupPriority is still 0 after inheritance, set default
 		if c.Endpoints[i].GroupPriority == 0 {
 			c.Endpoints[i].GroupPriority = currentGroupPriority
@@ -415,6 +435,8 @@ type ConfigWatcher struct {
 	callbacks     []func(*Config)
 	lastModTime   time.Time
 	debounceTimer *time.Timer
+	registry      *ConfigRegistry
+	registryPath  string
 }
 
 // NewConfigWatcher creates a new configuration watcher
@@ -437,13 +459,24 @@ func NewConfigWatcher(configPath string, logger *slog.Logger) (*ConfigWatcher, e
 		return nil, fmt.Errorf("failed to create file watcher: %w", err)
 	}
 
+	// Initialize config registry
+	configDir := filepath.Dir(configPath)
+	registryPath := filepath.Join(configDir, "registry.yaml")
+	registry, err := ScanAndInitializeRegistry(configDir, registryPath, configPath)
+	if err != nil {
+		logger.Warn("Failed to initialize config registry", "error", err)
+		registry = NewConfigRegistry()
+	}
+
 	cw := &ConfigWatcher{
-		configPath:  configPath,
-		config:      config,
-		watcher:     watcher,
-		logger:      logger,
-		callbacks:   make([]func(*Config), 0),
-		lastModTime: fileInfo.ModTime(),
+		configPath:   configPath,
+		config:       config,
+		watcher:      watcher,
+		logger:       logger,
+		callbacks:    make([]func(*Config), 0),
+		lastModTime:  fileInfo.ModTime(),
+		registry:     registry,
+		registryPath: registryPath,
 	}
 
 	// Add config file to watcher
@@ -707,4 +740,414 @@ func SavePriorityConfigWithComments(config *Config, path string) error {
 	}
 
 	return nil
+}
+
+// NewConfigRegistry creates a new configuration registry
+func NewConfigRegistry() *ConfigRegistry {
+	return &ConfigRegistry{
+		Configs:      make([]ConfigMetadata, 0),
+		ActiveConfig: "",
+		LastUpdated:  time.Now(),
+	}
+}
+
+// LoadConfigRegistry loads the configuration registry from file
+func LoadConfigRegistry(registryPath string) (*ConfigRegistry, error) {
+	if _, err := os.Stat(registryPath); os.IsNotExist(err) {
+		// Create new registry if file doesn't exist
+		registry := NewConfigRegistry()
+		if err := registry.Save(registryPath); err != nil {
+			return nil, fmt.Errorf("failed to create registry file: %w", err)
+		}
+		return registry, nil
+	}
+
+	data, err := os.ReadFile(registryPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read registry file: %w", err)
+	}
+
+	var registry ConfigRegistry
+	if err := yaml.Unmarshal(data, &registry); err != nil {
+		return nil, fmt.Errorf("failed to parse registry file: %w", err)
+	}
+
+	return &registry, nil
+}
+
+// Save saves the configuration registry to file
+func (cr *ConfigRegistry) Save(registryPath string) error {
+	cr.mutex.Lock()
+	defer cr.mutex.Unlock()
+
+	cr.LastUpdated = time.Now()
+
+	data, err := yaml.Marshal(cr)
+	if err != nil {
+		return fmt.Errorf("failed to marshal registry: %w", err)
+	}
+
+	// Ensure directory exists
+	dir := filepath.Dir(registryPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create directory: %w", err)
+	}
+
+	if err := os.WriteFile(registryPath, data, 0644); err != nil {
+		return fmt.Errorf("failed to write registry file: %w", err)
+	}
+
+	return nil
+}
+
+// AddConfig adds a new configuration to the registry
+func (cr *ConfigRegistry) AddConfig(metadata ConfigMetadata) error {
+	cr.mutex.Lock()
+	defer cr.mutex.Unlock()
+
+	// Check if config with same name already exists
+	for i, config := range cr.Configs {
+		if config.Name == metadata.Name {
+			// Update existing config
+			metadata.CreatedAt = config.CreatedAt // Preserve creation time
+			metadata.UpdatedAt = time.Now()
+			cr.Configs[i] = metadata
+			return nil
+		}
+	}
+
+	// Add new config
+	metadata.CreatedAt = time.Now()
+	metadata.UpdatedAt = time.Now()
+	cr.Configs = append(cr.Configs, metadata)
+	return nil
+}
+
+// RemoveConfig removes a configuration from the registry
+func (cr *ConfigRegistry) RemoveConfig(name string) error {
+	cr.mutex.Lock()
+	defer cr.mutex.Unlock()
+
+	// Don't allow removing active config
+	if cr.ActiveConfig == name {
+		return fmt.Errorf("cannot remove active configuration")
+	}
+
+	for i, config := range cr.Configs {
+		if config.Name == name {
+			cr.Configs = append(cr.Configs[:i], cr.Configs[i+1:]...)
+			return nil
+		}
+	}
+
+	return fmt.Errorf("configuration not found: %s", name)
+}
+
+// GetConfig returns a configuration by name
+func (cr *ConfigRegistry) GetConfig(name string) (*ConfigMetadata, error) {
+	cr.mutex.RLock()
+	defer cr.mutex.RUnlock()
+
+	for _, config := range cr.Configs {
+		if config.Name == name {
+			return &config, nil
+		}
+	}
+
+	return nil, fmt.Errorf("configuration not found: %s", name)
+}
+
+// GetAllConfigs returns all configurations
+func (cr *ConfigRegistry) GetAllConfigs() []ConfigMetadata {
+	cr.mutex.RLock()
+	defer cr.mutex.RUnlock()
+
+	configs := make([]ConfigMetadata, len(cr.Configs))
+	copy(configs, cr.Configs)
+	return configs
+}
+
+// SetActiveConfig sets the active configuration
+func (cr *ConfigRegistry) SetActiveConfig(name string) error {
+	cr.mutex.Lock()
+	defer cr.mutex.Unlock()
+
+	// Verify config exists
+	found := false
+	for i := range cr.Configs {
+		if cr.Configs[i].Name == name {
+			cr.Configs[i].IsActive = true
+			found = true
+		} else {
+			cr.Configs[i].IsActive = false
+		}
+	}
+
+	if !found {
+		return fmt.Errorf("configuration not found: %s", name)
+	}
+
+	cr.ActiveConfig = name
+	return nil
+}
+
+// GetActiveConfig returns the active configuration metadata
+func (cr *ConfigRegistry) GetActiveConfig() *ConfigMetadata {
+	cr.mutex.RLock()
+	defer cr.mutex.RUnlock()
+
+	for _, config := range cr.Configs {
+		if config.IsActive {
+			return &config
+		}
+	}
+
+	return nil
+}
+
+// RenameConfig renames a configuration
+func (cr *ConfigRegistry) RenameConfig(oldName, newName string) error {
+	cr.mutex.Lock()
+	defer cr.mutex.Unlock()
+
+	// Check if new name already exists
+	for _, config := range cr.Configs {
+		if config.Name == newName {
+			return fmt.Errorf("configuration with name '%s' already exists", newName)
+		}
+	}
+
+	// Find and rename the config
+	for i := range cr.Configs {
+		if cr.Configs[i].Name == oldName {
+			cr.Configs[i].Name = newName
+			cr.Configs[i].UpdatedAt = time.Now()
+
+			// Update active config name if necessary
+			if cr.ActiveConfig == oldName {
+				cr.ActiveConfig = newName
+			}
+
+			return nil
+		}
+	}
+
+	return fmt.Errorf("configuration not found: %s", oldName)
+}
+
+// ScanAndInitializeRegistry scans the config directory and initializes the registry
+func ScanAndInitializeRegistry(configDir, registryPath, currentConfigPath string) (*ConfigRegistry, error) {
+	registry, err := LoadConfigRegistry(registryPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load registry: %w", err)
+	}
+
+	// Scan config directory for YAML files
+	files, err := filepath.Glob(filepath.Join(configDir, "*.yaml"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan config directory: %w", err)
+	}
+
+	yamlFiles, err := filepath.Glob(filepath.Join(configDir, "*.yml"))
+	if err != nil {
+		return nil, fmt.Errorf("failed to scan config directory: %w", err)
+	}
+	files = append(files, yamlFiles...)
+
+	// Get current config name from path
+	currentConfigName := ""
+	if currentConfigPath != "" {
+		currentConfigName = getConfigNameFromPath(currentConfigPath)
+	}
+
+	// Process each config file
+	for _, filePath := range files {
+		// Skip registry file
+		if filepath.Base(filePath) == "registry.yaml" {
+			continue
+		}
+
+		// Skip test files
+		if strings.Contains(filepath.Base(filePath), "test") {
+			continue
+		}
+
+		// Try to load config to validate it
+		_, err := LoadConfig(filePath)
+		if err != nil {
+			// Skip invalid config files
+			continue
+		}
+
+		// Extract config name from filename
+		configName := getConfigNameFromPath(filePath)
+		if configName == "" {
+			continue
+		}
+
+		// Create metadata
+		_, err = os.Stat(filePath)
+		if err != nil {
+			continue
+		}
+
+		metadata := ConfigMetadata{
+			Name:        configName,
+			FilePath:    filePath,
+			Description: fmt.Sprintf("Configuration: %s", configName),
+			IsActive:    configName == currentConfigName,
+		}
+
+		// Add to registry
+		registry.AddConfig(metadata)
+	}
+
+	// Set active config
+	if currentConfigName != "" {
+		registry.SetActiveConfig(currentConfigName)
+	}
+
+	// Save updated registry
+	if err := registry.Save(registryPath); err != nil {
+		return nil, fmt.Errorf("failed to save registry: %w", err)
+	}
+
+	return registry, nil
+}
+
+// getConfigNameFromPath extracts config name from file path
+func getConfigNameFromPath(filePath string) string {
+	filename := filepath.Base(filePath)
+	ext := filepath.Ext(filename)
+	name := strings.TrimSuffix(filename, ext)
+
+	// Remove common prefixes
+	if strings.HasPrefix(name, "config_") {
+		return strings.TrimPrefix(name, "config_")
+	}
+	if strings.HasPrefix(name, "config") && name != "config" {
+		return strings.TrimPrefix(name, "config")
+	}
+
+	return name
+}
+
+// ImportConfigFile imports a configuration file with given name
+func ImportConfigFile(configDir, configName string, configData []byte, registry *ConfigRegistry) (string, error) {
+	// Validate config data
+	var testConfig Config
+	if err := yaml.Unmarshal(configData, &testConfig); err != nil {
+		return "", fmt.Errorf("invalid configuration format: %w", err)
+	}
+
+	// Set defaults and validate
+	testConfig.setDefaults()
+	if err := testConfig.validate(); err != nil {
+		return "", fmt.Errorf("invalid configuration: %w", err)
+	}
+
+	// Generate file path
+	fileName := fmt.Sprintf("config_%s.yaml", configName)
+	filePath := filepath.Join(configDir, fileName)
+
+	// Write config file
+	if err := os.WriteFile(filePath, configData, 0644); err != nil {
+		return "", fmt.Errorf("failed to write config file: %w", err)
+	}
+
+	// Add to registry
+	metadata := ConfigMetadata{
+		Name:        configName,
+		FilePath:    filePath,
+		Description: fmt.Sprintf("Imported configuration: %s", configName),
+		IsActive:    false,
+	}
+
+	if err := registry.AddConfig(metadata); err != nil {
+		return "", fmt.Errorf("failed to add to registry: %w", err)
+	}
+
+	return filePath, nil
+}
+
+// SwitchConfig switches to a different configuration file
+func (cw *ConfigWatcher) SwitchConfig(configName string) error {
+	cw.mutex.Lock()
+	defer cw.mutex.Unlock()
+
+	// Get config metadata from registry
+	configMeta, err := cw.registry.GetConfig(configName)
+	if err != nil {
+		return fmt.Errorf("configuration not found: %w", err)
+	}
+
+	// Check if file exists
+	if _, err := os.Stat(configMeta.FilePath); os.IsNotExist(err) {
+		return fmt.Errorf("configuration file not found: %s", configMeta.FilePath)
+	}
+
+	// Load new configuration
+	newConfig, err := LoadConfig(configMeta.FilePath)
+	if err != nil {
+		return fmt.Errorf("failed to load new config: %w", err)
+	}
+
+	// Stop watching old file
+	if err := cw.watcher.Remove(cw.configPath); err != nil {
+		cw.logger.Warn("Failed to remove old config from watcher", "error", err)
+	}
+
+	// Update config path and config
+	oldConfigPath := cw.configPath
+	cw.configPath = configMeta.FilePath
+	cw.config = newConfig
+
+	// Get new file modification time
+	fileInfo, err := os.Stat(configMeta.FilePath)
+	if err != nil {
+		cw.logger.Warn("Failed to get new config file info", "error", err)
+	} else {
+		cw.lastModTime = fileInfo.ModTime()
+	}
+
+	// Start watching new file
+	if err := cw.watcher.Add(configMeta.FilePath); err != nil {
+		cw.logger.Error("Failed to watch new config file", "error", err)
+		// Try to restore old config
+		cw.configPath = oldConfigPath
+		cw.watcher.Add(oldConfigPath)
+		return fmt.Errorf("failed to watch new config file: %w", err)
+	}
+
+	// Update registry active config
+	if err := cw.registry.SetActiveConfig(configName); err != nil {
+		cw.logger.Warn("Failed to update active config in registry", "error", err)
+	}
+
+	// Save registry
+	if err := cw.registry.Save(cw.registryPath); err != nil {
+		cw.logger.Warn("Failed to save registry", "error", err)
+	}
+
+	// Call all registered callbacks with new config
+	callbacks := make([]func(*Config), len(cw.callbacks))
+	copy(callbacks, cw.callbacks)
+
+	// Release lock before calling callbacks to avoid deadlock
+	cw.mutex.Unlock()
+	for _, callback := range callbacks {
+		callback(newConfig)
+	}
+	cw.mutex.Lock()
+
+	cw.logger.Info("🔄 配置已切换", "from", oldConfigPath, "to", configMeta.FilePath, "name", configName)
+
+	return nil
+}
+
+// GetRegistry returns the configuration registry
+func (cw *ConfigWatcher) GetRegistry() *ConfigRegistry {
+	cw.mutex.RLock()
+	defer cw.mutex.RUnlock()
+	return cw.registry
 }

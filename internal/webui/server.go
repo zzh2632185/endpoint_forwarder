@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -54,7 +57,7 @@ func (lc *LogCollector) AddLog(level, message, source string) {
 
 	// Add to logs buffer
 	lc.logs = append(lc.logs, entry)
-	
+
 	// Keep only the latest maxLogs entries
 	if len(lc.logs) > lc.maxLogs {
 		lc.logs = lc.logs[1:]
@@ -74,7 +77,7 @@ func (lc *LogCollector) AddLog(level, message, source string) {
 func (lc *LogCollector) GetLogs() []LogEntry {
 	lc.mutex.RLock()
 	defer lc.mutex.RUnlock()
-	
+
 	// Return a copy of logs
 	result := make([]LogEntry, len(lc.logs))
 	copy(result, lc.logs)
@@ -85,7 +88,7 @@ func (lc *LogCollector) GetLogs() []LogEntry {
 func (lc *LogCollector) Subscribe() chan LogEntry {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
-	
+
 	subscriber := make(chan LogEntry, 100) // Buffer for 100 log entries
 	lc.subscribers = append(lc.subscribers, subscriber)
 	return subscriber
@@ -95,7 +98,7 @@ func (lc *LogCollector) Subscribe() chan LogEntry {
 func (lc *LogCollector) Unsubscribe(subscriber chan LogEntry) {
 	lc.mutex.Lock()
 	defer lc.mutex.Unlock()
-	
+
 	for i, sub := range lc.subscribers {
 		if sub == subscriber {
 			lc.subscribers = append(lc.subscribers[:i], lc.subscribers[i+1:]...)
@@ -114,11 +117,27 @@ type WebUIServer struct {
 	server               *http.Server
 	logger               *slog.Logger
 	logCollector         *LogCollector
+	authMiddleware       *AuthMiddleware
 	running              bool
+	configRegistry       *config.ConfigRegistry
+	configDir            string
+	registryPath         string
+	configWatcher        *config.ConfigWatcher
 }
 
 // NewWebUIServer creates a new WebUI server
 func NewWebUIServer(cfg *config.Config, endpointManager *endpoint.Manager, monitoringMiddleware *middleware.MonitoringMiddleware, startTime time.Time, logger *slog.Logger) *WebUIServer {
+	// Initialize config management
+	configDir := "config"
+	registryPath := filepath.Join(configDir, "registry.yaml")
+
+	// Try to initialize config registry
+	configRegistry, err := config.ScanAndInitializeRegistry(configDir, registryPath, "")
+	if err != nil {
+		logger.Warn("Failed to initialize config registry", "error", err)
+		configRegistry = config.NewConfigRegistry()
+	}
+
 	return &WebUIServer{
 		cfg:                  cfg,
 		endpointManager:      endpointManager,
@@ -126,8 +145,26 @@ func NewWebUIServer(cfg *config.Config, endpointManager *endpoint.Manager, monit
 		startTime:            startTime,
 		logger:               logger,
 		logCollector:         NewLogCollector(500), // Keep consistent with TUI (500 logs)
+		authMiddleware:       NewAuthMiddleware(cfg.WebUI.Password),
 		running:              false,
+		configRegistry:       configRegistry,
+		configDir:            configDir,
+		registryPath:         registryPath,
 	}
+}
+
+// SetConfigWatcher sets the config watcher reference
+func (w *WebUIServer) SetConfigWatcher(configWatcher *config.ConfigWatcher) {
+	w.configWatcher = configWatcher
+	// Update registry from config watcher
+	w.configRegistry = configWatcher.GetRegistry()
+}
+
+// UpdateConfig updates the WebUI server configuration
+func (w *WebUIServer) UpdateConfig(cfg *config.Config) {
+	w.cfg = cfg
+	// Update auth middleware with new config
+	w.authMiddleware.UpdateConfig(cfg.WebUI.Password)
 }
 
 // AddLog allows external systems to add logs to the collector
@@ -145,22 +182,40 @@ func (w *WebUIServer) Start() error {
 
 	mux := http.NewServeMux()
 
-	// Serve static files (HTML, CSS, JS)
-	mux.HandleFunc("/", w.handleIndex)
-	mux.HandleFunc("/static/", w.handleStatic)
+	// Authentication endpoints (no auth required)
+	mux.HandleFunc("/login", w.authMiddleware.HandleLogin)
+	mux.HandleFunc("/logout", w.authMiddleware.HandleLogout)
 
-	// API endpoints
-	mux.HandleFunc("/api/overview", w.handleOverview)
-	mux.HandleFunc("/api/endpoints", w.handleEndpoints)
-	mux.HandleFunc("/api/connections", w.handleConnections)
-	mux.HandleFunc("/api/logs", w.handleLogs)
-	mux.HandleFunc("/api/config", w.handleConfig)
+	// Protected endpoints (require authentication if password is set)
+	mux.HandleFunc("/", w.authMiddleware.RequireAuth(w.handleIndex))
+	mux.HandleFunc("/static/", w.authMiddleware.RequireAuth(w.handleStatic))
 
-	// Server-Sent Events for real-time updates
-	mux.HandleFunc("/api/events", w.handleEvents)
-	
-	// Server-Sent Events for real-time log updates  
-	mux.HandleFunc("/api/log-stream", w.handleLogStream)
+	// Protected API endpoints
+	mux.HandleFunc("/api/overview", w.authMiddleware.RequireAuth(w.handleOverview))
+	mux.HandleFunc("/api/endpoints", w.authMiddleware.RequireAuth(w.handleEndpoints))
+	mux.HandleFunc("/api/connections", w.authMiddleware.RequireAuth(w.handleConnections))
+	mux.HandleFunc("/api/logs", w.authMiddleware.RequireAuth(w.handleLogs))
+	mux.HandleFunc("/api/config", w.authMiddleware.RequireAuth(w.handleConfig))
+
+	// Protected Server-Sent Events for real-time updates
+	mux.HandleFunc("/api/events", w.authMiddleware.RequireAuth(w.handleEvents))
+
+	// Protected Server-Sent Events for real-time log updates
+	mux.HandleFunc("/api/log-stream", w.authMiddleware.RequireAuth(w.handleLogStream))
+
+	// Protected Configuration editing endpoints (WebUI TUI-like functionality)
+	mux.HandleFunc("/api/endpoints/priority", w.authMiddleware.RequireAuth(w.handleEndpointPriority))
+	mux.HandleFunc("/api/config/save", w.authMiddleware.RequireAuth(w.handleConfigSave))
+	mux.HandleFunc("/api/endpoints/details", w.authMiddleware.RequireAuth(w.handleEndpointDetails))
+	mux.HandleFunc("/api/overview/token-history", w.authMiddleware.RequireAuth(w.handleTokenHistory))
+
+	// Protected Configuration management endpoints
+	mux.HandleFunc("/api/configs", w.authMiddleware.RequireAuth(w.handleConfigs))
+	mux.HandleFunc("/api/configs/import", w.authMiddleware.RequireAuth(w.handleConfigImport))
+	mux.HandleFunc("/api/configs/switch", w.authMiddleware.RequireAuth(w.handleConfigSwitch))
+	mux.HandleFunc("/api/configs/delete", w.authMiddleware.RequireAuth(w.handleConfigDelete))
+	mux.HandleFunc("/api/configs/rename", w.authMiddleware.RequireAuth(w.handleConfigRename))
+	mux.HandleFunc("/api/configs/active", w.authMiddleware.RequireAuth(w.handleActiveConfig))
 
 	w.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", w.cfg.WebUI.Host, w.cfg.WebUI.Port),
@@ -173,14 +228,31 @@ func (w *WebUIServer) Start() error {
 	w.running = true
 	w.logger.Info("🌐 WebUI服务器启动中...", "address", w.server.Addr)
 
+	// Start server in a goroutine
+	serverErr := make(chan error, 1)
 	go func() {
+		w.logger.Debug("WebUI服务器开始监听...", "address", w.server.Addr)
 		if err := w.server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			w.logger.Error("WebUI服务器错误", "error", err)
+			w.logger.Error("WebUI服务器监听失败", "error", err, "address", w.server.Addr)
+			serverErr <- err
+		} else {
+			w.logger.Debug("WebUI服务器监听结束", "address", w.server.Addr)
 		}
 	}()
 
-	w.logger.Info("✅ WebUI服务器启动成功！", "url", fmt.Sprintf("http://%s", w.server.Addr))
-	return nil
+	// Give server a moment to start
+	time.Sleep(200 * time.Millisecond)
+
+	// Check if server started successfully
+	select {
+	case err := <-serverErr:
+		w.running = false
+		w.logger.Error("WebUI服务器启动失败", "error", err, "address", w.server.Addr)
+		return fmt.Errorf("WebUI服务器启动失败: %w", err)
+	default:
+		w.logger.Info("✅ WebUI服务器启动成功！", "url", fmt.Sprintf("http://%s", w.server.Addr))
+		return nil
+	}
 }
 
 // Stop stops the WebUI server
@@ -388,7 +460,7 @@ func (w *WebUIServer) handleConnections(rw http.ResponseWriter, r *http.Request)
 // handleLogs returns logs data
 func (w *WebUIServer) handleLogs(rw http.ResponseWriter, r *http.Request) {
 	logs := w.logCollector.GetLogs()
-	
+
 	// Convert LogEntry to the format expected by the frontend
 	logData := make([]map[string]interface{}, 0, len(logs))
 	for _, log := range logs {
@@ -496,7 +568,7 @@ func (w *WebUIServer) handleLogStream(rw http.ResponseWriter, r *http.Request) {
 
 	// Create a channel to signal when the client disconnects
 	clientGone := r.Context().Done()
-	
+
 	// Subscribe to log updates
 	logChannel := w.logCollector.Subscribe()
 	defer w.logCollector.Unsubscribe(logChannel)
@@ -519,7 +591,7 @@ func (w *WebUIServer) handleLogStream(rw http.ResponseWriter, r *http.Request) {
 		case logEntry := <-logChannel:
 			jsonData, _ := json.Marshal(logEntry)
 			fmt.Fprintf(rw, "data: %s\n\n", jsonData)
-			
+
 			if flusher, ok := rw.(http.Flusher); ok {
 				flusher.Flush()
 			}
@@ -575,4 +647,476 @@ func (w *WebUIServer) getRecentConnectionHistory(history []*monitor.ConnectionIn
 	}
 
 	return connectionsWithTokens
+}
+
+// handleEndpointPriority handles endpoint priority modification requests
+func (w *WebUIServer) handleEndpointPriority(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var request struct {
+		EndpointName string `json:"endpointName"`
+		Priority     int    `json:"priority"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(rw, "Invalid JSON", http.StatusBadRequest)
+		return
+	}
+
+	// Find and update the endpoint priority in config
+	found := false
+	for i := range w.cfg.Endpoints {
+		if w.cfg.Endpoints[i].Name == request.EndpointName {
+			w.cfg.Endpoints[i].Priority = request.Priority
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		http.Error(rw, "Endpoint not found", http.StatusNotFound)
+		return
+	}
+
+	// Update endpoint manager with new config (same as TUI)
+	w.endpointManager.UpdateConfig(w.cfg)
+
+	w.logger.Info("WebUI: 端点优先级已更新", "endpoint", request.EndpointName, "priority", request.Priority)
+
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(map[string]interface{}{
+		"success": true,
+		"message": "Priority updated successfully",
+	})
+}
+
+// handleConfigSave handles configuration save requests
+func (w *WebUIServer) handleConfigSave(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var request struct {
+		ConfigPath string `json:"configPath,omitempty"`
+	}
+
+	// Parse request body (configPath is optional)
+	json.NewDecoder(r.Body).Decode(&request)
+
+	// Use default config path if not provided
+	configPath := request.ConfigPath
+	if configPath == "" {
+		// Try to get config path from environment or use default
+		// This should match the path used when starting the application
+		configPath = "config/config.yaml" // Default path
+	}
+
+	// Check if saving is enabled (same logic as TUI)
+	if w.cfg.TUI.SavePriorityEdits {
+		// Save to config file (preserve comments) - reuse TUI logic
+		if err := config.SavePriorityConfigWithComments(w.cfg, configPath); err != nil {
+			w.logger.Error("WebUI: 保存配置文件失败", "error", err)
+			http.Error(rw, fmt.Sprintf("Failed to save config: %v", err), http.StatusInternalServerError)
+			return
+		}
+		w.logger.Info("WebUI: 配置已保存到文件并同步到路由系统，优先级更改已生效")
+	} else {
+		w.logger.Info("WebUI: 优先级更改已应用到内存（配置文件保存已禁用）")
+	}
+
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(map[string]interface{}{
+		"success":     true,
+		"message":     "Configuration saved successfully",
+		"savedToFile": w.cfg.TUI.SavePriorityEdits,
+	})
+}
+
+// handleEndpointDetails returns detailed endpoint information (similar to TUI details panel)
+func (w *WebUIServer) handleEndpointDetails(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	endpointName := r.URL.Query().Get("name")
+	if endpointName == "" {
+		http.Error(rw, "Endpoint name is required", http.StatusBadRequest)
+		return
+	}
+
+	endpoints := w.endpointManager.GetAllEndpoints()
+	metrics := w.monitoringMiddleware.GetMetrics().GetMetrics()
+
+	var targetEndpoint *endpoint.Endpoint
+	for _, ep := range endpoints {
+		if ep.Config.Name == endpointName {
+			targetEndpoint = ep
+			break
+		}
+	}
+
+	if targetEndpoint == nil {
+		http.Error(rw, "Endpoint not found", http.StatusNotFound)
+		return
+	}
+
+	status := targetEndpoint.GetStatus()
+	endpointStats := metrics.EndpointStats[targetEndpoint.Config.Name]
+
+	// Build detailed response similar to TUI details panel
+	details := map[string]interface{}{
+		"name":          targetEndpoint.Config.Name,
+		"url":           targetEndpoint.Config.URL,
+		"priority":      targetEndpoint.Config.Priority,
+		"group":         targetEndpoint.Config.Group,
+		"groupPriority": targetEndpoint.Config.GroupPriority,
+		"timeout":       targetEndpoint.Config.Timeout.String(),
+		"healthy":       status.Healthy,
+		"lastCheck":     status.LastCheck.Format("15:04:05"),
+		"responseTime":  status.ResponseTime.Milliseconds(),
+		"headers":       targetEndpoint.Config.Headers,
+	}
+
+	if endpointStats != nil {
+		// Calculate average response time
+		var avgResponseTime int64 = 0
+		if endpointStats.TotalRequests > 0 {
+			avgResponseTime = endpointStats.TotalResponseTime.Milliseconds() / endpointStats.TotalRequests
+		}
+
+		details["stats"] = map[string]interface{}{
+			"totalRequests":       endpointStats.TotalRequests,
+			"successfulRequests":  endpointStats.SuccessfulRequests,
+			"failedRequests":      endpointStats.FailedRequests,
+			"averageResponseTime": avgResponseTime,
+			"minResponseTime":     endpointStats.MinResponseTime.Milliseconds(),
+			"maxResponseTime":     endpointStats.MaxResponseTime.Milliseconds(),
+			"tokenUsage": map[string]interface{}{
+				"inputTokens":         endpointStats.TokenUsage.InputTokens,
+				"outputTokens":        endpointStats.TokenUsage.OutputTokens,
+				"cacheCreationTokens": endpointStats.TokenUsage.CacheCreationTokens,
+				"cacheReadTokens":     endpointStats.TokenUsage.CacheReadTokens,
+			},
+		}
+	}
+
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(details)
+}
+
+// handleTokenHistory returns historical token usage data (similar to TUI chart)
+func (w *WebUIServer) handleTokenHistory(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	metrics := w.monitoringMiddleware.GetMetrics().GetMetrics()
+
+	// Get token history from metrics (similar to TUI chart data)
+	tokenHistory := make([]map[string]interface{}, 0)
+
+	// If we have token history points, use them
+	if len(metrics.TokenHistory) > 0 {
+		for _, point := range metrics.TokenHistory {
+			tokenHistory = append(tokenHistory, map[string]interface{}{
+				"timestamp":           point.Timestamp.Format("15:04:05"),
+				"inputTokens":         point.InputTokens,
+				"outputTokens":        point.OutputTokens,
+				"cacheCreationTokens": point.CacheCreationTokens,
+				"cacheReadTokens":     point.CacheReadTokens,
+				"totalTokens":         point.TotalTokens,
+			})
+		}
+	} else {
+		// If no history, provide current totals as single point
+		totalTokens := metrics.TotalTokenUsage.InputTokens + metrics.TotalTokenUsage.OutputTokens
+		tokenHistory = append(tokenHistory, map[string]interface{}{
+			"timestamp":           time.Now().Format("15:04:05"),
+			"inputTokens":         metrics.TotalTokenUsage.InputTokens,
+			"outputTokens":        metrics.TotalTokenUsage.OutputTokens,
+			"cacheCreationTokens": metrics.TotalTokenUsage.CacheCreationTokens,
+			"cacheReadTokens":     metrics.TotalTokenUsage.CacheReadTokens,
+			"totalTokens":         totalTokens,
+		})
+	}
+
+	response := map[string]interface{}{
+		"history": tokenHistory,
+		"current": map[string]interface{}{
+			"inputTokens":         metrics.TotalTokenUsage.InputTokens,
+			"outputTokens":        metrics.TotalTokenUsage.OutputTokens,
+			"cacheCreationTokens": metrics.TotalTokenUsage.CacheCreationTokens,
+			"cacheReadTokens":     metrics.TotalTokenUsage.CacheReadTokens,
+			"totalTokens":         metrics.TotalTokenUsage.InputTokens + metrics.TotalTokenUsage.OutputTokens,
+		},
+	}
+
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(response)
+}
+
+// handleConfigs returns all available configurations
+func (w *WebUIServer) handleConfigs(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	configs := w.configRegistry.GetAllConfigs()
+
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(map[string]interface{}{
+		"success": true,
+		"configs": configs,
+	})
+}
+
+// handleActiveConfig returns the current active configuration
+func (w *WebUIServer) handleActiveConfig(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	activeConfig := w.configRegistry.GetActiveConfig()
+
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(map[string]interface{}{
+		"success":      true,
+		"activeConfig": activeConfig,
+	})
+}
+
+// handleConfigImport handles configuration file import
+func (w *WebUIServer) handleConfigImport(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Parse multipart form
+	err := r.ParseMultipartForm(10 << 20) // 10MB max
+	if err != nil {
+		http.Error(rw, "Failed to parse form", http.StatusBadRequest)
+		return
+	}
+
+	// Get config name
+	configName := r.FormValue("configName")
+	if configName == "" {
+		http.Error(rw, "Config name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get uploaded file
+	file, _, err := r.FormFile("configFile")
+	if err != nil {
+		http.Error(rw, "Failed to get uploaded file", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	// Read file content
+	configData, err := io.ReadAll(file)
+	if err != nil {
+		http.Error(rw, "Failed to read file content", http.StatusInternalServerError)
+		return
+	}
+
+	// Import configuration
+	filePath, err := config.ImportConfigFile(w.configDir, configName, configData, w.configRegistry)
+	if err != nil {
+		w.logger.Error("Failed to import config", "error", err, "name", configName)
+		http.Error(rw, fmt.Sprintf("Failed to import config: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Save registry
+	if err := w.configRegistry.Save(w.registryPath); err != nil {
+		w.logger.Error("Failed to save registry", "error", err)
+		http.Error(rw, "Failed to save registry", http.StatusInternalServerError)
+		return
+	}
+
+	w.logger.Info("Config imported successfully", "name", configName, "path", filePath)
+
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(map[string]interface{}{
+		"success":  true,
+		"message":  "Configuration imported successfully",
+		"filePath": filePath,
+	})
+}
+
+// handleConfigSwitch handles configuration switching
+func (w *WebUIServer) handleConfigSwitch(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var request struct {
+		ConfigName string `json:"configName"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(rw, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if request.ConfigName == "" {
+		http.Error(rw, "Config name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Check if config watcher is available
+	if w.configWatcher == nil {
+		http.Error(rw, "Configuration switching not available", http.StatusServiceUnavailable)
+		return
+	}
+
+	// Perform actual config switch
+	if err := w.configWatcher.SwitchConfig(request.ConfigName); err != nil {
+		w.logger.Error("Failed to switch config", "error", err, "name", request.ConfigName)
+		http.Error(rw, fmt.Sprintf("Failed to switch config: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	w.logger.Info("Config switched successfully", "name", request.ConfigName)
+
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Configuration switched to: %s", request.ConfigName),
+	})
+}
+
+// handleConfigDelete handles configuration deletion
+func (w *WebUIServer) handleConfigDelete(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var request struct {
+		ConfigName string `json:"configName"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(rw, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if request.ConfigName == "" {
+		http.Error(rw, "Config name is required", http.StatusBadRequest)
+		return
+	}
+
+	// Get config metadata before deletion
+	configMeta, err := w.configRegistry.GetConfig(request.ConfigName)
+	if err != nil {
+		http.Error(rw, fmt.Sprintf("Configuration not found: %s", request.ConfigName), http.StatusNotFound)
+		return
+	}
+
+	// Remove from registry
+	if err := w.configRegistry.RemoveConfig(request.ConfigName); err != nil {
+		http.Error(rw, fmt.Sprintf("Failed to remove config: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Delete config file
+	if err := os.Remove(configMeta.FilePath); err != nil {
+		w.logger.Warn("Failed to delete config file", "error", err, "path", configMeta.FilePath)
+		// Continue anyway, registry is already updated
+	}
+
+	// Save registry
+	if err := w.configRegistry.Save(w.registryPath); err != nil {
+		w.logger.Error("Failed to save registry", "error", err)
+		http.Error(rw, "Failed to save registry", http.StatusInternalServerError)
+		return
+	}
+
+	w.logger.Info("Config deleted successfully", "name", request.ConfigName)
+
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Configuration deleted: %s", request.ConfigName),
+	})
+}
+
+// handleConfigRename handles configuration renaming
+func (w *WebUIServer) handleConfigRename(rw http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPut {
+		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var request struct {
+		OldName string `json:"oldName"`
+		NewName string `json:"newName"`
+	}
+
+	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		http.Error(rw, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if request.OldName == "" || request.NewName == "" {
+		http.Error(rw, "Both old name and new name are required", http.StatusBadRequest)
+		return
+	}
+
+	// Get config metadata before renaming
+	configMeta, err := w.configRegistry.GetConfig(request.OldName)
+	if err != nil {
+		http.Error(rw, fmt.Sprintf("Configuration not found: %s", request.OldName), http.StatusNotFound)
+		return
+	}
+
+	// Rename in registry
+	if err := w.configRegistry.RenameConfig(request.OldName, request.NewName); err != nil {
+		http.Error(rw, fmt.Sprintf("Failed to rename config: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	// Generate new file path
+	newFileName := fmt.Sprintf("config_%s.yaml", request.NewName)
+	newFilePath := filepath.Join(w.configDir, newFileName)
+
+	// Rename config file
+	if err := os.Rename(configMeta.FilePath, newFilePath); err != nil {
+		// Rollback registry change
+		w.configRegistry.RenameConfig(request.NewName, request.OldName)
+		http.Error(rw, fmt.Sprintf("Failed to rename config file: %v", err), http.StatusInternalServerError)
+		return
+	}
+
+	// Update file path in registry
+	updatedMeta, _ := w.configRegistry.GetConfig(request.NewName)
+	updatedMeta.FilePath = newFilePath
+	w.configRegistry.AddConfig(*updatedMeta)
+
+	// Save registry
+	if err := w.configRegistry.Save(w.registryPath); err != nil {
+		w.logger.Error("Failed to save registry", "error", err)
+		http.Error(rw, "Failed to save registry", http.StatusInternalServerError)
+		return
+	}
+
+	w.logger.Info("Config renamed successfully", "oldName", request.OldName, "newName", request.NewName)
+
+	rw.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(rw).Encode(map[string]interface{}{
+		"success": true,
+		"message": fmt.Sprintf("Configuration renamed from '%s' to '%s'", request.OldName, request.NewName),
+	})
 }

@@ -165,6 +165,11 @@ func main() {
 		// Update auth middleware
 		authMiddleware.UpdateConfig(newCfg.Auth)
 
+		// Update WebUI server
+		if webUIServer != nil {
+			webUIServer.UpdateConfig(newCfg)
+		}
+
 		if !tuiEnabled {
 			newLogger.Info("🔄 所有组件已更新为新配置")
 		}
@@ -239,6 +244,8 @@ func main() {
 	// Start WebUI if enabled
 	if cfg.WebUI.Enabled {
 		webUIServer = webui.NewWebUIServer(cfg, endpointManager, monitoringMiddleware, startTime, logger)
+		// Set config watcher reference for configuration switching
+		webUIServer.SetConfigWatcher(configWatcher)
 		if err := webUIServer.Start(); err != nil {
 			logger.Error("❌ WebUI服务器启动失败", "error", err)
 		} else {
