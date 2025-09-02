@@ -131,7 +131,7 @@ jobs:
         prerelease: false
         generate_release_notes: true
         body: |
-          ## Claude Request Forwarder ${{ github.ref_name }}
+          ## Claude EndPoints Forwarder ${{ github.ref_name }}
           
           ### 📦 下载说明
           
