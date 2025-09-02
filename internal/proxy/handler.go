@@ -412,14 +412,16 @@ func (h *Handler) copyHeaders(src *http.Request, dst *http.Request, ep *endpoint
 		dst.Host = u.Host
 	}
 
-	// Add or override Authorization header if token is configured
-	if ep.Config.Token != "" {
-		dst.Header.Set("Authorization", "Bearer "+ep.Config.Token)
+	// Add or override Authorization header with dynamically resolved token
+	token := h.endpointManager.GetTokenForEndpoint(ep)
+	if token != "" {
+		dst.Header.Set("Authorization", "Bearer "+token)
 	}
 
-	// Add or override X-Api-Key header if api-key is configured
-	if ep.Config.ApiKey != "" {
-		dst.Header.Set("X-Api-Key", ep.Config.ApiKey)
+	// Add or override X-Api-Key header with dynamically resolved api-key
+	apiKey := h.endpointManager.GetApiKeyForEndpoint(ep)
+	if apiKey != "" {
+		dst.Header.Set("X-Api-Key", apiKey)
 	}
 
 	// Add custom headers from endpoint configuration

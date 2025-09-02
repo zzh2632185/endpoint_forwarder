@@ -220,7 +220,7 @@ func (c *Config) setDefaults() {
 	// Save priority edits defaults to false for safety
 	// Note: We don't set a default here since the zero value (false) is what we want
 
-	// Set default timeouts for endpoints and handle parameter inheritance
+	// Set default timeouts for endpoints and handle parameter inheritance (except tokens)
 	var defaultEndpoint *EndpointConfig
 	if len(c.Endpoints) > 0 {
 		defaultEndpoint = &c.Endpoints[0]
@@ -260,10 +260,8 @@ func (c *Config) setDefaults() {
 			}
 		}
 		
-		// Inherit token from first endpoint if not specified
-		if c.Endpoints[i].Token == "" && defaultEndpoint != nil && defaultEndpoint.Token != "" {
-			c.Endpoints[i].Token = defaultEndpoint.Token
-		}
+		// NOTE: We do NOT inherit tokens here - tokens will be resolved dynamically at runtime
+		// This allows for proper group-based token switching when groups fail
 		
 		// Inherit api-key from first endpoint if not specified
 		if c.Endpoints[i].ApiKey == "" && defaultEndpoint != nil && defaultEndpoint.ApiKey != "" {

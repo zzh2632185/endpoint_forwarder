@@ -64,165 +64,204 @@ func (rh *RetryHandler) Execute(operation Operation, connID string) (*http.Respo
 	return rh.ExecuteWithContext(context.Background(), operation, connID)
 }
 
-// ExecuteWithContext executes an operation with context, retry and fallback logic with group management
+// ExecuteWithContext executes an operation with context, retry and fallback logic with dynamic group management
 func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operation, connID string) (*http.Response, error) {
-	// Get healthy endpoints with real-time testing if enabled
-	var endpoints []*endpoint.Endpoint
-	if rh.endpointManager.GetConfig().Strategy.Type == "fastest" && rh.endpointManager.GetConfig().Strategy.FastTestEnabled {
-		endpoints = rh.endpointManager.GetFastestEndpointsWithRealTimeTest(ctx)
-	} else {
-		endpoints = rh.endpointManager.GetHealthyEndpoints()
-	}
-	
-	if len(endpoints) == 0 {
-		return nil, fmt.Errorf("no healthy endpoints available in active groups")
-	}
-
 	var lastErr error
 	var lastResp *http.Response
+	var totalEndpointsAttempted int
 	
-	// Group endpoints by group name for failure tracking
-	groupEndpoints := make(map[string][]*endpoint.Endpoint)
-	for _, ep := range endpoints {
-		groupName := ep.Config.Group
-		if groupName == "" {
-			groupName = "Default"
-		}
-		groupEndpoints[groupName] = append(groupEndpoints[groupName], ep)
-	}
+	// Track groups that have been put into cooldown during this request
+	groupsSetToCooldownThisRequest := make(map[string]bool)
 	
-	// Track failed groups
-	failedGroups := make(map[string]bool)
-	
-	// Try each endpoint
-	for endpointIndex, ep := range endpoints {
-		// Add endpoint info to context for logging
-		ctxWithEndpoint := context.WithValue(ctx, "selected_endpoint", ep.Config.Name)
-		
-		groupName := ep.Config.Group
-		if groupName == "" {
-			groupName = "Default"
+	for {
+		// Get healthy endpoints with real-time testing if enabled (dynamic refresh)
+		var endpoints []*endpoint.Endpoint
+		if rh.endpointManager.GetConfig().Strategy.Type == "fastest" && rh.endpointManager.GetConfig().Strategy.FastTestEnabled {
+			endpoints = rh.endpointManager.GetFastestEndpointsWithRealTimeTest(ctx)
+		} else {
+			endpoints = rh.endpointManager.GetHealthyEndpoints()
 		}
 		
-		slog.InfoContext(ctxWithEndpoint, fmt.Sprintf("🎯 [请求转发] 选择端点: %s (组: %s, 尝试 %d/%d)", 
-			ep.Config.Name, groupName, endpointIndex+1, len(endpoints)))
+		if len(endpoints) == 0 {
+			return nil, fmt.Errorf("no healthy endpoints available in active groups")
+		}
+
+		// Group endpoints by group name for failure tracking
+		groupEndpoints := make(map[string][]*endpoint.Endpoint)
+		for _, ep := range endpoints {
+			groupName := ep.Config.Group
+			if groupName == "" {
+				groupName = "Default"
+			}
+			groupEndpoints[groupName] = append(groupEndpoints[groupName], ep)
+		}
 		
-		// Retry logic for current endpoint
-		for attempt := 1; attempt <= rh.config.Retry.MaxAttempts; attempt++ {
-			select {
-			case <-ctx.Done():
-				if lastResp != nil {
-					lastResp.Body.Close()
-				}
-				return nil, ctx.Err()
-			default:
-			}
-
-			// Execute operation
-			resp, err := operation(ep, connID)
-			if err == nil && resp != nil {
-				// Check if response status code indicates success or should be retried
-				retryDecision := rh.shouldRetryStatusCode(resp.StatusCode)
-				
-				if !retryDecision.IsRetryable {
-					// Success or non-retryable error - return the response
-					if attempt > 1 || endpointIndex > 0 {
-						slog.InfoContext(ctxWithEndpoint, fmt.Sprintf("✅ [请求成功] 端点: %s (组: %s), 状态码: %d (重试 %d次后成功)", 
-							ep.Config.Name, groupName, resp.StatusCode, attempt-1))
-					} else {
-						slog.InfoContext(ctxWithEndpoint, fmt.Sprintf("✅ [请求成功] 端点: %s (组: %s), 状态码: %d", 
-							ep.Config.Name, groupName, resp.StatusCode))
-					}
-					return resp, nil
-				}
-				
-				// Status code indicates we should retry
-				slog.WarnContext(ctxWithEndpoint, fmt.Sprintf("🔄 [需要重试] 端点: %s (组: %s, 尝试 %d/%d) - 状态码: %d (%s)", 
-					ep.Config.Name, groupName, attempt, rh.config.Retry.MaxAttempts, resp.StatusCode, retryDecision.Reason))
-				
-				// Close the response body before retrying
-				resp.Body.Close()
-				lastErr = &RetryableError{
-					StatusCode: resp.StatusCode,
-					IsRetryable: true,
-					Reason: retryDecision.Reason,
-				}
-			} else {
-				// Network error or other failure
-				lastErr = err
-				if err != nil {
-					slog.WarnContext(ctxWithEndpoint, fmt.Sprintf("❌ [网络错误] 端点: %s (组: %s, 尝试 %d/%d) - 错误: %s", 
-						ep.Config.Name, groupName, attempt, rh.config.Retry.MaxAttempts, err.Error()))
-				}
-			}
-
-			// Don't wait after the last attempt on the last endpoint
-			if attempt == rh.config.Retry.MaxAttempts {
-				break
-			}
-
-			// Record retry (we're about to retry)
-			if rh.monitoringMiddleware != nil && connID != "" {
-				rh.monitoringMiddleware.RecordRetry(connID, ep.Config.Name)
-			}
-
-			// Calculate delay with exponential backoff
-			delay := rh.calculateDelay(attempt)
+		// Track which groups failed completely in this iteration
+		groupsFailedThisIteration := make(map[string]bool)
+		endpointsTriedThisIteration := 0
+		
+		// Try each endpoint in current endpoint set
+		for endpointIndex, ep := range endpoints {
+			totalEndpointsAttempted++
+			endpointsTriedThisIteration++
 			
-			slog.InfoContext(ctxWithEndpoint, fmt.Sprintf("⏳ [等待重试] 端点: %s (组: %s) - %s后进行第%d次尝试", 
-				ep.Config.Name, groupName, delay.String(), attempt+1))
-
-			// Wait before retry
-			select {
-			case <-ctx.Done():
-				if lastResp != nil {
-					lastResp.Body.Close()
+			// Add endpoint info to context for logging
+			ctxWithEndpoint := context.WithValue(ctx, "selected_endpoint", ep.Config.Name)
+			
+			groupName := ep.Config.Group
+			if groupName == "" {
+				groupName = "Default"
+			}
+			
+			slog.InfoContext(ctxWithEndpoint, fmt.Sprintf("🎯 [请求转发] 选择端点: %s (组: %s, 总尝试 %d)", 
+				ep.Config.Name, groupName, totalEndpointsAttempted))
+			
+			// Retry logic for current endpoint
+			for attempt := 1; attempt <= rh.config.Retry.MaxAttempts; attempt++ {
+				select {
+				case <-ctx.Done():
+					if lastResp != nil {
+						lastResp.Body.Close()
+					}
+					return nil, ctx.Err()
+				default:
 				}
-				return nil, ctx.Err()
-			case <-time.After(delay):
-				// Continue to next attempt
+
+				// Execute operation
+				resp, err := operation(ep, connID)
+				if err == nil && resp != nil {
+					// Check if response status code indicates success or should be retried
+					retryDecision := rh.shouldRetryStatusCode(resp.StatusCode)
+					
+					if !retryDecision.IsRetryable {
+						// Success or non-retryable error - return the response
+						slog.InfoContext(ctxWithEndpoint, fmt.Sprintf("✅ [请求成功] 端点: %s (组: %s), 状态码: %d (总尝试 %d 个端点)", 
+							ep.Config.Name, groupName, resp.StatusCode, totalEndpointsAttempted))
+						return resp, nil
+					}
+					
+					// Status code indicates we should retry
+					slog.WarnContext(ctxWithEndpoint, fmt.Sprintf("🔄 [需要重试] 端点: %s (组: %s, 尝试 %d/%d) - 状态码: %d (%s)", 
+						ep.Config.Name, groupName, attempt, rh.config.Retry.MaxAttempts, resp.StatusCode, retryDecision.Reason))
+					
+					// Close the response body before retrying
+					resp.Body.Close()
+					lastErr = &RetryableError{
+						StatusCode: resp.StatusCode,
+						IsRetryable: true,
+						Reason: retryDecision.Reason,
+					}
+				} else {
+					// Network error or other failure
+					lastErr = err
+					if err != nil {
+						slog.WarnContext(ctxWithEndpoint, fmt.Sprintf("❌ [网络错误] 端点: %s (组: %s, 尝试 %d/%d) - 错误: %s", 
+							ep.Config.Name, groupName, attempt, rh.config.Retry.MaxAttempts, err.Error()))
+					}
+				}
+
+				// Don't wait after the last attempt on the current endpoint
+				if attempt == rh.config.Retry.MaxAttempts {
+					break
+				}
+
+				// Record retry (we're about to retry)
+				if rh.monitoringMiddleware != nil && connID != "" {
+					rh.monitoringMiddleware.RecordRetry(connID, ep.Config.Name)
+				}
+
+				// Calculate delay with exponential backoff
+				delay := rh.calculateDelay(attempt)
+				
+				slog.InfoContext(ctxWithEndpoint, fmt.Sprintf("⏳ [等待重试] 端点: %s (组: %s) - %s后进行第%d次尝试", 
+					ep.Config.Name, groupName, delay.String(), attempt+1))
+
+				// Wait before retry
+				select {
+				case <-ctx.Done():
+					if lastResp != nil {
+						lastResp.Body.Close()
+					}
+					return nil, ctx.Err()
+				case <-time.After(delay):
+					// Continue to next attempt
+				}
+			}
+
+			slog.ErrorContext(ctxWithEndpoint, fmt.Sprintf("💥 [端点失败] 端点 %s (组: %s) 所有 %d 次尝试均失败", 
+				ep.Config.Name, groupName, rh.config.Retry.MaxAttempts))
+
+			// Check if all endpoints in this group have been tried and failed in this iteration
+			groupEndpointsCount := len(groupEndpoints[groupName])
+			failedEndpointsInGroup := 0
+			for _, groupEp := range groupEndpoints[groupName] {
+				// Count endpoints in this group that we've already tried in this iteration
+				for i := 0; i <= endpointIndex; i++ {
+					if endpoints[i].Config.Name == groupEp.Config.Name {
+						failedEndpointsInGroup++
+						break
+					}
+				}
+			}
+			
+			// If all endpoints in current group have failed in this iteration, mark group as failed
+			if failedEndpointsInGroup == groupEndpointsCount {
+				groupsFailedThisIteration[groupName] = true
 			}
 		}
-
-		slog.ErrorContext(ctxWithEndpoint, fmt.Sprintf("💥 [端点失败] 端点 %s (组: %s) 所有 %d 次尝试均失败", 
-			ep.Config.Name, groupName, rh.config.Retry.MaxAttempts))
-
-		// Mark endpoint's group as failed
-		failedGroups[groupName] = true
 		
-		// Check if all endpoints in this group have been tried and failed
-		groupEndpointsCount := len(groupEndpoints[groupName])
-		failedEndpointsInGroup := 0
-		for _, groupEp := range groupEndpoints[groupName] {
-			// Count endpoints in this group that we've already tried
-			for i := 0; i <= endpointIndex; i++ {
-				if endpoints[i].Config.Name == groupEp.Config.Name {
-					failedEndpointsInGroup++
+		// After trying all endpoints in current iteration, put failed groups into cooldown
+		for groupName := range groupsFailedThisIteration {
+			if !groupsSetToCooldownThisRequest[groupName] {
+				slog.WarnContext(ctx, fmt.Sprintf("❄️ [组失败] 组 %s 中所有端点均已失败，将组设置为冷却状态", groupName))
+				rh.endpointManager.GetGroupManager().SetGroupCooldown(groupName)
+				groupsSetToCooldownThisRequest[groupName] = true
+			}
+		}
+		
+		// Check if there are still active groups available after cooldown
+		// Get fresh endpoint list to see if any new groups became active
+		var newEndpoints []*endpoint.Endpoint
+		if rh.endpointManager.GetConfig().Strategy.Type == "fastest" && rh.endpointManager.GetConfig().Strategy.FastTestEnabled {
+			newEndpoints = rh.endpointManager.GetFastestEndpointsWithRealTimeTest(ctx)
+		} else {
+			newEndpoints = rh.endpointManager.GetHealthyEndpoints()
+		}
+		
+		// If we have new endpoints available (from different groups), continue the retry loop
+		if len(newEndpoints) > 0 && len(groupsFailedThisIteration) > 0 {
+			// Check if the new endpoints are from different groups than what we just tried
+			newGroupsAvailable := false
+			newGroups := make(map[string]bool)
+			for _, ep := range newEndpoints {
+				groupName := ep.Config.Group
+				if groupName == "" {
+					groupName = "Default"
+				}
+				newGroups[groupName] = true
+			}
+			
+			// Check if any new group is available that wasn't in the failed iteration
+			for newGroup := range newGroups {
+				if !groupsFailedThisIteration[newGroup] {
+					newGroupsAvailable = true
 					break
 				}
 			}
+			
+			if newGroupsAvailable {
+				slog.InfoContext(ctx, fmt.Sprintf("🔄 [组切换] 检测到新的活跃组，继续重试 (已尝试 %d 个端点)", totalEndpointsAttempted))
+				continue // Continue outer loop with fresh endpoint list
+			}
 		}
 		
-		// If all endpoints in current group have failed, put group in cooldown
-		if failedEndpointsInGroup == groupEndpointsCount {
-			slog.WarnContext(ctxWithEndpoint, fmt.Sprintf("❄️ [组失败] 组 %s 中所有端点均已失败，将组设置为冷却状态", groupName))
-			rh.endpointManager.GetGroupManager().SetGroupCooldown(groupName)
-		}
-
-		// If this isn't the last endpoint, log fallback
-		if endpointIndex < len(endpoints)-1 {
-			nextGroupName := endpoints[endpointIndex+1].Config.Group
-			if nextGroupName == "" {
-				nextGroupName = "Default"
-			}
-			slog.InfoContext(ctxWithEndpoint, fmt.Sprintf("🔄 [切换端点] 从 %s (组: %s) 切换到 %s (组: %s)", 
-				ep.Config.Name, groupName, endpoints[endpointIndex+1].Config.Name, nextGroupName))
-		}
+		// No more groups available, break the retry loop
+		break
 	}
 
-	slog.ErrorContext(ctx, fmt.Sprintf("💥 [全部失败] 活跃组中所有 %d 个端点均不可用 - 最后错误: %v", 
-		len(endpoints), lastErr))
-	return nil, fmt.Errorf("all endpoints in active groups failed after retries, last error: %w", lastErr)
+	slog.ErrorContext(ctx, fmt.Sprintf("💥 [全部失败] 所有活跃组均不可用 - 总共尝试了 %d 个端点 - 最后错误: %v", 
+		totalEndpointsAttempted, lastErr))
+	return nil, fmt.Errorf("all active groups exhausted after trying %d endpoints, last error: %w", totalEndpointsAttempted, lastErr)
 }
 
 // calculateDelay calculates the delay for exponential backoff

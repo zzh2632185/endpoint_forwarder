@@ -7,6 +7,121 @@ import (
 	"time"
 )
 
+func TestDynamicTokenResolution(t *testing.T) {
+	configContent := `
+server:
+  host: "localhost"
+  port: 8080
+
+strategy:
+  type: "priority"
+
+endpoints:
+  # Group 1: main - first endpoint defines the group token
+  - name: "main-primary"
+    url: "https://api1.example.com"
+    group: "main"
+    group-priority: 1
+    priority: 1
+    token: "sk-main-token"
+    timeout: "30s"
+
+  - name: "main-backup"
+    url: "https://api2.example.com"
+    priority: 2
+    # No token defined - should dynamically resolve to "sk-main-token" at runtime
+
+  # Group 2: backup - first endpoint defines the group token  
+  - name: "backup-primary"
+    url: "https://api3.example.com"
+    group: "backup"
+    group-priority: 2
+    priority: 1
+    token: "sk-backup-token"
+    timeout: "45s"
+
+  - name: "backup-secondary"
+    url: "https://api4.example.com"
+    priority: 2
+    # No token defined - should dynamically resolve to "sk-backup-token" at runtime
+
+  # Group 3: with explicit token override
+  - name: "override-primary"
+    url: "https://api5.example.com"
+    group: "override"
+    group-priority: 3
+    priority: 1
+    token: "sk-group-token"
+
+  - name: "override-custom"
+    url: "https://api6.example.com"
+    priority: 2
+    token: "sk-custom-token"
+    # Has its own token - should use its own, not inherit from group
+`
+
+	tmpFile, err := os.CreateTemp("", "test-dynamic-config-*.yaml")
+	if err != nil {
+		t.Fatalf("Failed to create temp file: %v", err)
+	}
+	defer os.Remove(tmpFile.Name())
+
+	if _, err := tmpFile.WriteString(configContent); err != nil {
+		t.Fatalf("Failed to write config: %v", err)
+	}
+	tmpFile.Close()
+
+	config, err := LoadConfig(tmpFile.Name())
+	if err != nil {
+		t.Fatalf("Failed to load config: %v", err)
+	}
+
+	// Verify that tokens are NOT inherited during config parsing (dynamic resolution)
+	// Group 1: main
+	mainPrimary := config.Endpoints[0]
+	if mainPrimary.Token != "sk-main-token" {
+		t.Errorf("main-primary: expected own token 'sk-main-token', got '%s'", mainPrimary.Token)
+	}
+
+	mainBackup := config.Endpoints[1]
+	if mainBackup.Token != "" {
+		t.Errorf("main-backup: expected no static token (for dynamic resolution), got '%s'", mainBackup.Token)
+	}
+
+	// Group 2: backup
+	backupPrimary := config.Endpoints[2]
+	if backupPrimary.Token != "sk-backup-token" {
+		t.Errorf("backup-primary: expected own token 'sk-backup-token', got '%s'", backupPrimary.Token)
+	}
+
+	backupSecondary := config.Endpoints[3]
+	if backupSecondary.Token != "" {
+		t.Errorf("backup-secondary: expected no static token (for dynamic resolution), got '%s'", backupSecondary.Token)
+	}
+
+	// Group 3: override scenarios
+	overridePrimary := config.Endpoints[4]
+	if overridePrimary.Token != "sk-group-token" {
+		t.Errorf("override-primary: expected own token 'sk-group-token', got '%s'", overridePrimary.Token)
+	}
+
+	overrideCustom := config.Endpoints[5]
+	if overrideCustom.Token != "sk-custom-token" {
+		t.Errorf("override-custom: expected own token 'sk-custom-token', got '%s'", overrideCustom.Token)
+	}
+
+	// Verify group assignments are still working
+	if mainBackup.Group != "main" {
+		t.Errorf("main-backup: expected group 'main', got '%s'", mainBackup.Group)
+	}
+	if backupSecondary.Group != "backup" {
+		t.Errorf("backup-secondary: expected group 'backup', got '%s'", backupSecondary.Group)
+	}
+	if overrideCustom.Group != "override" {
+		t.Errorf("override-custom: expected group 'override', got '%s'", overrideCustom.Group)
+	}
+}
+
 func TestFullParameterInheritance(t *testing.T) {
 	configContent := `
 server:
@@ -30,7 +145,7 @@ endpoints:
   - name: "inherits-all"
     url: "https://api2.example.com"
     priority: 2
-    # Should inherit timeout, token, and all headers
+    # Should inherit timeout and all headers, but NOT token (dynamic resolution)
 
   - name: "partial-override" 
     url: "https://api3.example.com"
@@ -65,13 +180,14 @@ endpoints:
 		t.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Test full inheritance endpoint
+	// Test full inheritance endpoint (timeout and headers, but not token)
 	inheritsAll := config.Endpoints[1]
 	if inheritsAll.Timeout != 45*time.Second {
 		t.Errorf("Expected inherited timeout 45s, got %v", inheritsAll.Timeout)
 	}
-	if inheritsAll.Token != "primary-token" {
-		t.Errorf("Expected inherited token 'primary-token', got '%s'", inheritsAll.Token)
+	// Token should NOT be inherited in the new dynamic system
+	if inheritsAll.Token != "" {
+		t.Errorf("Expected no static token (dynamic resolution), got '%s'", inheritsAll.Token)
 	}
 	if len(inheritsAll.Headers) != 3 {
 		t.Errorf("Expected 3 inherited headers, got %d", len(inheritsAll.Headers))
@@ -80,13 +196,14 @@ endpoints:
 		t.Errorf("Expected inherited header X-API-Version=v1, got '%s'", inheritsAll.Headers["X-API-Version"])
 	}
 
-	// Test partial override endpoint
+	// Test partial override endpoint (timeout and headers, but not token)
 	partialOverride := config.Endpoints[2]
 	if partialOverride.Timeout != 60*time.Second {
 		t.Errorf("Expected override timeout 60s, got %v", partialOverride.Timeout)
 	}
-	if partialOverride.Token != "primary-token" {
-		t.Errorf("Expected inherited token 'primary-token', got '%s'", partialOverride.Token)
+	// Token should NOT be inherited in the new dynamic system
+	if partialOverride.Token != "" {
+		t.Errorf("Expected no static token (dynamic resolution), got '%s'", partialOverride.Token)
 	}
 	if partialOverride.Headers["X-API-Version"] != "v2" {
 		t.Errorf("Expected override header X-API-Version=v2, got '%s'", partialOverride.Headers["X-API-Version"])
