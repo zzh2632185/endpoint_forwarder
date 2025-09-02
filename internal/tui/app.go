@@ -564,3 +564,24 @@ func (t *TUIApp) SavePrioritiesToConfig() error {
 	
 	return nil
 }
+
+// UpdateConfig updates the TUI configuration when config is reloaded
+func (t *TUIApp) UpdateConfig(newCfg *config.Config) {
+	t.editMutex.Lock()
+	defer t.editMutex.Unlock()
+	
+	// Update configuration
+	oldCfg := t.cfg
+	t.cfg = newCfg
+	
+	// Clear temporary priorities when config changes to prevent stale data
+	t.tempPriorities = make(map[string]int)
+	t.isDirty = false
+	
+	// Update endpoint manager with new config
+	t.endpointManager.UpdateConfig(newCfg)
+	
+	// Log configuration update
+	t.AddLog("INFO", fmt.Sprintf("配置已重载 - 端点数量: %d -> %d", 
+		len(oldCfg.Endpoints), len(newCfg.Endpoints)), "CONFIG")
+}

@@ -163,6 +163,11 @@ func main() {
 		// Update auth middleware
 		authMiddleware.UpdateConfig(newCfg.Auth)
 		
+		// Update TUI if enabled
+		if tuiApp != nil {
+			tuiApp.UpdateConfig(newCfg)
+		}
+		
 		if !tuiEnabled {
 			newLogger.Info("🔄 所有组件已更新为新配置")
 		}
