@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/rivo/tview"
 	
 	"endpoint_forwarder/config"
@@ -181,7 +182,7 @@ func (v *OverviewView) Update() {
 	
 	v.chartBox.SetText(chartText.String())
 	
-	// Endpoints status - maintain consistent formatting
+	// Endpoints status - maintain consistent formatting with group info
 	endpoints := v.endpointManager.GetAllEndpoints()
 	var statusText strings.Builder
 	
@@ -192,10 +193,31 @@ func (v *OverviewView) Update() {
 		}
 	}
 	
-	statusText.WriteString(fmt.Sprintf("[white::b]Total:[white::-] [cyan]%3d[white] | [white::b]Healthy:[white::-] [green]%3d[white]\n\n", len(endpoints), healthyCount))
+	// Show group summary with active group details
+	groupManager := v.endpointManager.GetGroupManager()
+	allGroups := groupManager.GetAllGroups()
+	activeGroups := groupManager.GetActiveGroups()
+	cooledGroupsCount := 0
+	for _, group := range allGroups {
+		if groupManager.IsGroupInCooldown(group.Name) {
+			cooledGroupsCount++
+		}
+	}
 	
-	// Always show exactly 6 lines to maintain consistent height
-	for i := 0; i < 6; i++ {
+	statusText.WriteString(fmt.Sprintf("[white::b]Total:[white::-] [cyan]%3d[white] | [white::b]Healthy:[white::-] [green]%3d[white]\n", len(endpoints), healthyCount))
+	
+	// Show current active group with priority
+	if len(activeGroups) > 0 {
+		activeGroup := activeGroups[0] // First active group (highest priority)
+		statusText.WriteString(fmt.Sprintf("[white::b]Active Group:[white::-] [green]%s[white] (P:%d) | [cyan]%d[white]总组 ([red]%d冷却[white])\n\n", 
+			activeGroup.Name, activeGroup.Priority, len(allGroups), cooledGroupsCount))
+	} else {
+		statusText.WriteString(fmt.Sprintf("[white::b]Groups:[white::-] [cyan]%2d[white] ([yellow]无活跃[white], [red]%d冷却[white])\n\n", 
+			len(allGroups), cooledGroupsCount))
+	}
+	
+	// Always show exactly 5 lines to maintain consistent height (reduced from 6 for group summary)
+	for i := 0; i < 5; i++ {
 		if i < len(endpoints) {
 			ep := endpoints[i]
 			status := ep.GetStatus()
@@ -204,10 +226,37 @@ func (v *OverviewView) Update() {
 				healthIcon = "[green]●[white]"
 			}
 			
-			// Fixed width formatting to prevent jumping
-			statusText.WriteString(fmt.Sprintf("%s [cyan]%-12s[white] (%3dms)\n",
+			// Get group info
+			groupName := ep.Config.Group
+			if groupName == "" {
+				groupName = "Default"
+			}
+			
+			// Check group status  
+			groupStatusIcon := "[green]◆[white]"
+			if groupManager.IsGroupInCooldown(groupName) {
+				groupStatusIcon = "[red]◆[white]"
+			} else {
+				// Check if group is active
+				activeGroups := groupManager.GetActiveGroups()
+				isActive := false
+				for _, group := range activeGroups {
+					if group.Name == groupName {
+						isActive = true
+						break
+					}
+				}
+				if !isActive {
+					groupStatusIcon = "[gray]◆[white]"
+				}
+			}
+			
+			// Fixed width formatting to prevent jumping, with longer group name display
+			statusText.WriteString(fmt.Sprintf("%s %s [cyan]%-8s[white] ([cyan]%-12s[white]) %3dms\n",
 				healthIcon,
-				truncateString(ep.Config.Name, 12),
+				groupStatusIcon,
+				truncateString(ep.Config.Name, 8),
+				truncateString(groupName, 12),
 				status.ResponseTime.Milliseconds()))
 		} else {
 			// Fill empty lines to maintain height
@@ -215,7 +264,7 @@ func (v *OverviewView) Update() {
 		}
 	}
 	
-	if len(endpoints) > 6 {
+	if len(endpoints) > 5 {
 		statusText.WriteString("[gray]... and more[white]")
 	}
 	
@@ -242,6 +291,13 @@ func (v *OverviewView) Update() {
 	}
 }
 
+// GroupRowInfo tracks information about each row in the grouped table
+type GroupRowInfo struct {
+	IsGroupHeader bool
+	GroupName     string
+	Endpoint      *endpoint.Endpoint
+}
+
 // EndpointsView represents the endpoints tab
 type EndpointsView struct {
 	container           *tview.Flex
@@ -249,14 +305,17 @@ type EndpointsView struct {
 	detailBox           *tview.TextView
 	monitoringMiddleware *middleware.MonitoringMiddleware
 	endpointManager     *endpoint.Manager
+	tuiApp              *TUIApp  // Reference to main TUI app for edit mode
 	selectedRow         int
 	lastDetailHash      string // Track detail content changes
+	groupRowMap         map[int]GroupRowInfo // Track which rows are groups vs endpoints
 }
 
 func NewEndpointsView(monitoringMiddleware *middleware.MonitoringMiddleware, endpointManager *endpoint.Manager) *EndpointsView {
 	view := &EndpointsView{
 		monitoringMiddleware: monitoringMiddleware,
 		endpointManager:     endpointManager,
+		groupRowMap:         make(map[int]GroupRowInfo),
 	}
 	view.setupUI()
 	return view
@@ -264,7 +323,9 @@ func NewEndpointsView(monitoringMiddleware *middleware.MonitoringMiddleware, end
 
 func (v *EndpointsView) setupUI() {
 	v.table = tview.NewTable().SetBorders(true).SetSelectable(true, false)
-	v.table.SetBorder(true).SetTitle(" 🎯 Endpoints ").SetTitleAlign(tview.AlignLeft)
+	
+	// Update table title based on edit mode
+	v.updateTableTitle()
 	
 	// Set up table selection change handler (auto-update on row change)
 	v.table.SetSelectionChangedFunc(func(row, column int) {
@@ -281,18 +342,64 @@ func (v *EndpointsView) setupUI() {
 		AddItem(v.table, 0, 3, true).
 		AddItem(v.detailBox, 0, 2, false)
 
-	// Setup headers
-	headers := []string{"Status", "Name", "URL", "Priority", "Response Time", "Requests"}
+	// Setup fixed headers
+	v.setupTableHeaders()
+}
+
+// setupTableHeaders sets up the fixed table headers
+func (v *EndpointsView) setupTableHeaders() {
+	headers := []string{"Status", "Name", "URL", "Priority", "Resp", "Reqs", "Fails"}
+	
 	for col, header := range headers {
-		v.table.SetCell(0, col, tview.NewTableCell(header).SetTextColor(tview.Styles.SecondaryTextColor).SetSelectable(false))
+		cell := tview.NewTableCell(fmt.Sprintf("[white::b]%s[white::-]", header)).
+			SetTextColor(tcell.ColorWhite).
+			SetAlign(tview.AlignLeft).
+			SetSelectable(false)
+		
+		// Only URL column should expand
+		if col == 2 { // URL column
+			cell.SetExpansion(1)
+		}
+		
+		v.table.SetCell(0, col, cell)
 	}
+}
+
+// updateTableTitle updates the table title based on current mode
+func (v *EndpointsView) updateTableTitle() {
+	var title string
+	if v.tuiApp != nil && v.tuiApp.IsInEditMode() {
+		isDirty := ""
+		if v.tuiApp.HasUnsavedChanges() {
+			isDirty = " *"
+		}
+		
+		// Check if saving is enabled
+		saveHint := "Ctrl+S to Save"
+		if v.tuiApp != nil && !v.tuiApp.IsSaveEnabled() {
+			saveHint = "Ctrl+S Save (No File)"
+		}
+		
+		title = fmt.Sprintf(" 🎯 Endpoints [Edit Mode%s - ESC to Exit %s] ", isDirty, saveHint)
+	} else {
+		title = " 🎯 Endpoints [Enter to Edit / Number Keys for Priority] "
+	}
+	v.table.SetBorder(true).SetTitle(title).SetTitleAlign(tview.AlignLeft)
 }
 
 func (v *EndpointsView) GetPrimitive() tview.Primitive {
 	return v.container
 }
 
+// SetTUIApp sets the TUIApp reference for edit mode functionality
+func (v *EndpointsView) SetTUIApp(app *TUIApp) {
+	v.tuiApp = app
+}
+
 func (v *EndpointsView) Update() {
+	// Update table title first
+	v.updateTableTitle()
+	
 	v.updateTable()
 	// Update details for currently selected row
 	if v.selectedRow > 0 {
@@ -302,94 +409,241 @@ func (v *EndpointsView) Update() {
 	}
 }
 
-// updateTable updates the endpoints table efficiently
+// updateTable updates the endpoints table efficiently with grouped format
 func (v *EndpointsView) updateTable() {
 	endpoints := v.endpointManager.GetAllEndpoints()
 	metrics := v.monitoringMiddleware.GetMetrics().GetMetrics()
 	
-	// Get current number of data rows (excluding header)
-	currentRows := v.table.GetRowCount() - 1
-	
-	// Adjust table size only when necessary
-	if currentRows < len(endpoints) {
-		// Add missing rows
-		for i := currentRows; i < len(endpoints); i++ {
-			row := i + 1
-			for col := 0; col < 6; col++ {
-				v.table.SetCell(row, col, tview.NewTableCell(""))
-			}
+	// Group endpoints by group name
+	groupedEndpoints := make(map[string][]*endpoint.Endpoint)
+	for _, ep := range endpoints {
+		groupName := ep.Config.Group
+		if groupName == "" {
+			groupName = "Default"
 		}
-	} else if currentRows > len(endpoints) {
-		// Remove excess rows from the end
-		for row := v.table.GetRowCount() - 1; row > len(endpoints); row-- {
-			v.table.RemoveRow(row)
+		groupedEndpoints[groupName] = append(groupedEndpoints[groupName], ep)
+	}
+	
+	// Get groups sorted by priority
+	groupManager := v.endpointManager.GetGroupManager()
+	allGroups := groupManager.GetAllGroups()
+	
+	// Clear existing table content but preserve headers
+	v.table.Clear()
+	v.setupTableHeaders()
+	
+	currentRow := 1 // Start from row 1 (row 0 is headers)
+	v.groupRowMap = make(map[int]GroupRowInfo) // Track which rows are groups vs endpoints
+	
+	for _, group := range allGroups {
+		groupEndpoints := groupedEndpoints[group.Name]
+		if len(groupEndpoints) == 0 {
+			continue
+		}
+		
+		// Add group header row
+		v.addGroupHeaderRow(currentRow, group, groupEndpoints)
+		v.groupRowMap[currentRow] = GroupRowInfo{IsGroupHeader: true, GroupName: group.Name}
+		currentRow++
+		
+		// Add endpoint rows for this group
+		for _, ep := range groupEndpoints {
+			v.addEndpointRow(currentRow, ep, metrics)
+			v.groupRowMap[currentRow] = GroupRowInfo{IsGroupHeader: false, GroupName: group.Name, Endpoint: ep}
+			currentRow++
+		}
+		
+		// Add separator row between groups (empty row)
+		if group != allGroups[len(allGroups)-1] { // Don't add separator after last group
+			v.addSeparatorRow(currentRow)
+			currentRow++
 		}
 	}
 	
-	// Update endpoint data without recreating cells
-	for i, ep := range endpoints {
-		row := i + 1 // Skip header row
-		status := ep.GetStatus()
-		
-		statusIcon := "🔴"
-		if status.Healthy {
-			statusIcon = "🟢"
-		}
-		
-		endpointStats := metrics.EndpointStats[ep.Config.Name]
-		totalReqs := int64(0)
-		if endpointStats != nil {
-			totalReqs = endpointStats.TotalRequests
-		}
-		
-		// Safely update cells
-		if row < v.table.GetRowCount() {
-			if cell := v.table.GetCell(row, 0); cell != nil {
-				cell.SetText(statusIcon)
-			}
-			if cell := v.table.GetCell(row, 1); cell != nil {
-				cell.SetText(ep.Config.Name)
-			}
-			if cell := v.table.GetCell(row, 2); cell != nil {
-				cell.SetText(truncateString(ep.Config.URL, 25))
-			}
-			if cell := v.table.GetCell(row, 3); cell != nil {
-				cell.SetText(fmt.Sprintf("%d", ep.Config.Priority))
-			}
-			if cell := v.table.GetCell(row, 4); cell != nil {
-				cell.SetText(fmt.Sprintf("%dms", status.ResponseTime.Milliseconds()))
-			}
-			if cell := v.table.GetCell(row, 5); cell != nil {
-				cell.SetText(fmt.Sprintf("%d", totalReqs))
-			}
-		}
-	}
-	
-	// Auto-select first row if no row is selected and endpoints exist
+	// Auto-select first endpoint row if no row is selected
 	if v.selectedRow == 0 && len(endpoints) > 0 {
-		v.table.Select(1, 0) // Select first data row (row 1, column 0)
-		v.selectedRow = 1
+		// Find first endpoint row (skip group headers)
+		for row, info := range v.groupRowMap {
+			if !info.IsGroupHeader && info.Endpoint != nil {
+				v.table.Select(row, 0)
+				v.selectedRow = row
+				break
+			}
+		}
+	}
+}
+
+// addGroupHeaderRow adds a group header row to the table
+func (v *EndpointsView) addGroupHeaderRow(row int, group *endpoint.GroupInfo, groupEndpoints []*endpoint.Endpoint) {
+	// Count healthy endpoints in this group
+	healthyCount := 0
+	for _, ep := range groupEndpoints {
+		if ep.IsHealthy() {
+			healthyCount++
+		}
+	}
+	
+	// Determine group status and color
+	groupManager := v.endpointManager.GetGroupManager()
+	var groupStatusText, groupColor string
+	
+	if groupManager.IsGroupInCooldown(group.Name) {
+		remaining := groupManager.GetGroupCooldownRemaining(group.Name)
+		groupStatusText = fmt.Sprintf("Cooldown %ds", int(remaining.Seconds()))
+		groupColor = "[red::b]"
+	} else if group.IsActive {
+		groupStatusText = "Active"
+		groupColor = "[green::b]"
+	} else {
+		groupStatusText = "Standby"
+		groupColor = "[gray::b]"
+	}
+	
+	// Create multi-line group header with full group name
+	groupLine1 := fmt.Sprintf("%s %s P%d[white::-]", groupColor, group.Name, group.Priority)
+	groupLine2 := fmt.Sprintf("%s %s %d/%d[white::-]", groupColor, groupStatusText, healthyCount, len(groupEndpoints))
+	
+	// Set group header cell spanning first 3 columns (Status, Name, URL) with multi-line content
+	groupHeaderText := fmt.Sprintf("%s\n%s", groupLine1, groupLine2)
+	
+	cell := tview.NewTableCell(groupHeaderText).
+		SetTextColor(tcell.ColorWhite).
+		SetAlign(tview.AlignLeft).
+		SetSelectable(false).
+		SetExpansion(1)
+	
+	v.table.SetCell(row, 0, cell)
+	
+	// Fill remaining columns with empty cells to maintain table structure
+	for col := 1; col < 7; col++ {
+		emptyCell := tview.NewTableCell("").
+			SetSelectable(false)
+		v.table.SetCell(row, col, emptyCell)
+	}
+}
+
+// addEndpointRow adds an endpoint row to the table
+func (v *EndpointsView) addEndpointRow(row int, ep *endpoint.Endpoint, metrics *monitor.Metrics) {
+	status := ep.GetStatus()
+	
+	// Status icon
+	statusIcon := "🔴"
+	if status.Healthy {
+		statusIcon = "🟢"
+	}
+	
+	// Get endpoint stats
+	endpointStats := metrics.EndpointStats[ep.Config.Name]
+	totalReqs := int64(0)
+	if endpointStats != nil {
+		totalReqs = endpointStats.TotalRequests
+	}
+	
+	// Get effective priority (temp or config)
+	effectivePriority := ep.Config.Priority
+	if v.tuiApp != nil {
+		effectivePriority = v.tuiApp.GetEffectivePriority(ep.Config.Name)
+	}
+	
+	// Check if this is the highest priority endpoint in the group
+	isHighestPriority := false
+	if v.tuiApp != nil {
+		// Find all endpoints in the same group
+		groupName := ep.Config.Group
+		if groupName == "" {
+			groupName = "Default"
+		}
+		
+		minPriority := 999
+		allEndpoints := v.endpointManager.GetAllEndpoints()
+		for _, endpoint := range allEndpoints {
+			epGroupName := endpoint.Config.Group
+			if epGroupName == "" {
+				epGroupName = "Default"
+			}
+			if epGroupName == groupName {
+				priority := v.tuiApp.GetEffectivePriority(endpoint.Config.Name)
+				if priority < minPriority {
+					minPriority = priority
+				}
+			}
+		}
+		isHighestPriority = effectivePriority == minPriority
+	}
+	
+	// Priority text with edit mode indicator
+	priorityText := fmt.Sprintf("%d", effectivePriority)
+	if v.tuiApp != nil && v.tuiApp.IsInEditMode() {
+		priorityText += " [Edit]"
+		if isHighestPriority {
+			priorityText = fmt.Sprintf("[red::b]%d [Edit][white::-]", effectivePriority)
+		}
+	} else if isHighestPriority {
+		priorityText = fmt.Sprintf("[green::b]%d[white::-]", effectivePriority)
+	}
+	
+	// Set endpoint cells with indentation to show they belong to the group
+	// Optimized column widths to prevent group from taking too much space
+	cells := []string{
+		fmt.Sprintf("  %s", statusIcon),                                    // Indented status
+		fmt.Sprintf("  %s", truncateString(ep.Config.Name, 10)),           // Indented name (shorter)
+		truncateString(ep.Config.URL, 25),                                 // URL (shorter)
+		priorityText,                                                      // Priority
+		fmt.Sprintf("%dms", status.ResponseTime.Milliseconds()),           // Response time
+		fmt.Sprintf("%d", totalReqs),                                      // Requests
+		fmt.Sprintf("%d", status.ConsecutiveFails),                        // Failures
+	}
+	
+	for col, text := range cells {
+		cell := tview.NewTableCell(text).
+			SetTextColor(tcell.ColorWhite).
+			SetAlign(tview.AlignLeft).
+			SetSelectable(true)
+		v.table.SetCell(row, col, cell)
+	}
+}
+
+// addSeparatorRow adds a separator row between groups
+func (v *EndpointsView) addSeparatorRow(row int) {
+	for col := 0; col < 7; col++ {
+		cell := tview.NewTableCell("").
+			SetSelectable(false)
+		v.table.SetCell(row, col, cell)
 	}
 }
 
 // updateDetails updates the detail view for the selected endpoint
 func (v *EndpointsView) updateDetails() {
-	endpoints := v.endpointManager.GetAllEndpoints()
 	metrics := v.monitoringMiddleware.GetMetrics().GetMetrics()
 	
-	// Check if selected row is valid
-	if v.selectedRow <= 0 || v.selectedRow > len(endpoints) {
+	// Check if selected row is valid and get the row info
+	rowInfo, exists := v.groupRowMap[v.selectedRow]
+	if !exists || rowInfo.IsGroupHeader || rowInfo.Endpoint == nil {
+		// Selected row is a group header or invalid, show group info or clear
+		if exists && rowInfo.IsGroupHeader {
+			v.showGroupDetails(rowInfo.GroupName)
+		} else {
+			v.detailBox.SetText("[gray]Select an endpoint to view details[white]\n\n[yellow]Use arrow keys to navigate[white]")
+		}
 		return
 	}
 	
-	endpoint := endpoints[v.selectedRow-1] // Subtract 1 for header row
+	endpoint := rowInfo.Endpoint
 	status := endpoint.GetStatus()
 	
 	var detailText strings.Builder
-	detailText.WriteString(fmt.Sprintf("[blue::b]🎯 %s[white::-]\n\n", endpoint.Config.Name))
+	detailText.WriteString(fmt.Sprintf("[blue::b]🎯 %s[white::-]\n", endpoint.Config.Name))
+	
+	// Group information
+	groupName := endpoint.Config.Group
+	if groupName == "" {
+		groupName = "Default"
+	}
+	detailText.WriteString(fmt.Sprintf("[yellow::b]📋 Group Info[white::-]\n"))
+	detailText.WriteString(fmt.Sprintf("Group: [cyan]%s[white] | Priority: [cyan]%d[white]\n", groupName, endpoint.Config.GroupPriority))
 	
 	// Basic Info - Use smart URL truncation
-	detailText.WriteString("[yellow::b]📋 Basic Info[white::-]\n")
+	detailText.WriteString("\n[yellow::b]📋 Basic Info[white::-]\n")
 	detailText.WriteString(fmt.Sprintf("URL: [cyan]%s[white]\n", smartTruncateURL(endpoint.Config.URL, 35)))
 	detailText.WriteString(fmt.Sprintf("Priority: [cyan]%d[white] | Timeout: [cyan]%v[white]\n", 
 		endpoint.Config.Priority, endpoint.Config.Timeout))
@@ -412,7 +666,7 @@ func (v *EndpointsView) updateDetails() {
 		
 		// Compact metrics format
 		successRate := float64(endpointStats.SuccessfulRequests) / float64(endpointStats.TotalRequests) * 100
-		detailText.WriteString(fmt.Sprintf("Req: [cyan]%s[white] | Success: [green]%.1f%%[white] | Retries: [yellow]%s[white]\n",
+		detailText.WriteString(fmt.Sprintf("Requests: [cyan]%s[white] | Success: [green]%.1f%%[white] | Retries: [yellow]%s[white]\n",
 			formatLargeNumber(endpointStats.TotalRequests), successRate, formatLargeNumber(int64(endpointStats.RetryCount))))
 		
 		// Response time metrics
@@ -479,19 +733,71 @@ func (v *EndpointsView) updateDetails() {
 	}
 }
 
+// showGroupDetails shows details for a selected group header
+func (v *EndpointsView) showGroupDetails(groupName string) {
+	groupManager := v.endpointManager.GetGroupManager()
+	allGroups := groupManager.GetAllGroups()
+	
+	var selectedGroup *endpoint.GroupInfo
+	for _, group := range allGroups {
+		if group.Name == groupName {
+			selectedGroup = group
+			break
+		}
+	}
+	
+	if selectedGroup == nil {
+		v.detailBox.SetText("[gray]Group information not available[white]")
+		return
+	}
+	
+	var detailText strings.Builder
+	detailText.WriteString(fmt.Sprintf("[blue::b]📂 Group: %s[white::-]\n\n", selectedGroup.Name))
+	
+	// Group status
+	if groupManager.IsGroupInCooldown(selectedGroup.Name) {
+		remaining := groupManager.GetGroupCooldownRemaining(selectedGroup.Name)
+		detailText.WriteString(fmt.Sprintf("[red::b]❄️ Status: Cooldown (%ds remaining)[white::-]\n", int(remaining.Seconds())))
+	} else if selectedGroup.IsActive {
+		detailText.WriteString("[green::b]🟢 Status: Active[white::-]\n")
+	} else {
+		detailText.WriteString("[gray::b]⚫ Status: Standby[white::-]\n")
+	}
+	
+	detailText.WriteString(fmt.Sprintf("Priority: [cyan]%d[white]\n", selectedGroup.Priority))
+	detailText.WriteString(fmt.Sprintf("Endpoints: [cyan]%d[white]\n\n", len(selectedGroup.Endpoints)))
+	
+	// List endpoints in this group
+	detailText.WriteString("[yellow::b]📋 Endpoints in Group[white::-]\n")
+	for i, ep := range selectedGroup.Endpoints {
+		status := ep.GetStatus()
+		healthIcon := "🔴"
+		if status.Healthy {
+			healthIcon = "🟢"
+		}
+		
+		detailText.WriteString(fmt.Sprintf("%d. %s %s (P:%d, %dms)\n", 
+			i+1, healthIcon, ep.Config.Name, ep.Config.Priority, status.ResponseTime.Milliseconds()))
+	}
+	
+	v.detailBox.SetText(detailText.String())
+}
+
 // ConnectionsView represents the connections tab
 type ConnectionsView struct {
 	container           *tview.Flex
 	statsBox            *tview.TextView
 	monitoringMiddleware *middleware.MonitoringMiddleware
+	endpointManager     *endpoint.Manager  // Add endpoint manager reference
 	config              *config.Config
 	lastDisplayHash     string // Track content changes to avoid unnecessary updates
 	needsUpdate         bool   // Flag to indicate if data has changed since last display
 }
 
-func NewConnectionsView(monitoringMiddleware *middleware.MonitoringMiddleware, cfg *config.Config) *ConnectionsView {
+func NewConnectionsView(monitoringMiddleware *middleware.MonitoringMiddleware, endpointManager *endpoint.Manager, cfg *config.Config) *ConnectionsView {
 	view := &ConnectionsView{
 		monitoringMiddleware: monitoringMiddleware,
+		endpointManager:     endpointManager,
 		config:              cfg,
 	}
 	view.setupUI()
@@ -539,10 +845,21 @@ func (v *ConnectionsView) Update() {
 		}
 		duration := time.Since(conn.StartTime)
 		
-		// Display endpoint name and retry count
+		// Display endpoint name and find its group
 		endpointDisplay := conn.Endpoint
+		groupName := "Unknown"
 		if endpointDisplay == "" || endpointDisplay == "unknown" {
 			endpointDisplay = "pending"
+		} else {
+			// Find the group for this endpoint
+			endpoint := v.endpointManager.GetEndpointByName(endpointDisplay)
+			if endpoint != nil {
+				if endpoint.Config.Group != "" {
+					groupName = endpoint.Config.Group
+				} else {
+					groupName = "Default"
+				}
+			}
 		}
 		
 		retryDisplay := ""
@@ -551,11 +868,12 @@ func (v *ConnectionsView) Update() {
 			retryDisplay = fmt.Sprintf(" (%d/%d retry)", conn.RetryCount, maxAttempts)
 		}
 		
-		stats.WriteString(fmt.Sprintf("  [cyan]%-15s[white] %-6s %-20s -> [yellow]%s[white]%s [gray](%8s)[white]\n",
-			truncateString(conn.ClientIP, 15),
+		stats.WriteString(fmt.Sprintf("  [cyan]%-12s[white] %-6s %-18s -> [yellow]%s[white]/[magenta]%s[white]%s [gray](%8s)[white]\n",
+			truncateString(conn.ClientIP, 12),
 			conn.Method,
-			truncateString(conn.Path, 20),
+			truncateString(conn.Path, 18),
 			truncateString(endpointDisplay, 8),
+			truncateString(groupName, 12),
 			retryDisplay,
 			formatDurationShort(duration)))
 		connCount++
@@ -763,7 +1081,16 @@ func (v *ConfigView) Update() {
 	details.WriteString("\n")
 	
 	details.WriteString("[blue::b]🖥️ TUI Settings[white::-]\n")
-	details.WriteString(fmt.Sprintf("Update Interval: [cyan]%v[white]\n\n", v.cfg.TUI.UpdateInterval))
+	details.WriteString(fmt.Sprintf("Update Interval: [cyan]%v[white]\n", v.cfg.TUI.UpdateInterval))
+	
+	saveStatus := "[red]Disabled[white]"
+	saveHint := "Changes are applied to memory only"
+	if v.cfg.TUI.SavePriorityEdits {
+		saveStatus = "[green]Enabled[white]"
+		saveHint = "Priority edits are saved to config file"
+	}
+	details.WriteString(fmt.Sprintf("Save Priority Edits: %s\n", saveStatus))
+	details.WriteString(fmt.Sprintf("[gray]%s[white]\n\n", saveHint))
 	
 	details.WriteString("[blue::b]🎯 Endpoints[white::-]\n")
 	details.WriteString(fmt.Sprintf("Total: [cyan]%d[white]\n", len(v.cfg.Endpoints)))

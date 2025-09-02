@@ -250,8 +250,7 @@ func main() {
 
 	// Start TUI if enabled
 	if tuiEnabled {
-		tuiApp = tui.NewTUIApp(cfg, endpointManager, monitoringMiddleware, startTime)
-
+		tuiApp = tui.NewTUIApp(cfg, endpointManager, monitoringMiddleware, startTime, *configPath)
 		// Update logger to send logs to TUI as well
 		logger = setupLogger(cfg.Logging, tuiApp, webUIServer)
 		slog.SetDefault(logger)

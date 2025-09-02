@@ -417,6 +417,11 @@ func (h *Handler) copyHeaders(src *http.Request, dst *http.Request, ep *endpoint
 		dst.Header.Set("Authorization", "Bearer "+ep.Config.Token)
 	}
 
+	// Add or override X-Api-Key header if api-key is configured
+	if ep.Config.ApiKey != "" {
+		dst.Header.Set("X-Api-Key", ep.Config.ApiKey)
+	}
+
 	// Add custom headers from endpoint configuration
 	for key, value := range ep.Config.Headers {
 		dst.Header.Set(key, value)

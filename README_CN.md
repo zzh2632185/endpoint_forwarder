@@ -14,7 +14,8 @@
 - **重试和故障转移**: 指数退避算法和自动端点故障转移
 - **监控功能**: 内置健康检查和Prometheus风格的指标
 - **结构化日志**: 可配置的JSON或文本日志记录，支持多个级别
-- **TUI界面**: 内置终端用户界面，实时监控（默认启用）
+- **TUI界面**: 内置终端用户界面，支持实时监控和交互式优先级编辑（默认启用）
+- **动态优先级覆盖**: 通过 `-p` 参数运行时调整端点优先级，适用于测试和故障转移场景
 
 ## 快速开始
 
@@ -39,6 +40,9 @@
    
    # 显式启用 TUI（默认行为）
    ./endpoint_forwarder -config config/config.yaml --tui
+   
+   # 运行时覆盖端点优先级（适用于测试或故障转移）
+   ./endpoint_forwarder -config config/config.yaml -p "端点名称"
    ```
 
 4. **在 Claude Code 中配置**:
@@ -122,6 +126,13 @@ tui:
 - `1-5`: 直接跳转到标签（1=概览，2=端点等）
 - `Ctrl+C`: 退出应用程序
 - `方向键`: 在视图内导航
+
+**优先级编辑（端点标签页）:**
+- `Enter`: 进入优先级编辑模式，实现实时优先级调整
+- `ESC`: 退出编辑模式，不保存更改
+- `Ctrl+S`: 保存优先级更改到配置文件
+- `1-9`: 为选中端点设置优先级（在编辑模式下）
+- 可视化指示器显示当前编辑状态和未保存的更改
 
 **用法说明:**
 - 当 `enabled: false`（默认）时：不需要身份验证，请求直接通过
@@ -303,6 +314,7 @@ curl http://localhost:8080/metrics
 - `-version`: 显示版本信息
 - `-tui`: 启用 TUI 界面（默认：true）
 - `-no-tui`: 禁用 TUI 界面（在传统控制台模式下运行）
+- `-p "端点名称"`: 覆盖端点优先级（将指定端点设为优先级1的主要端点）
 
 示例：
 ```bash
@@ -314,6 +326,12 @@ curl http://localhost:8080/metrics
 
 # 显示版本信息
 ./endpoint_forwarder -version
+
+# 覆盖端点优先级（适用于测试特定端点）
+./endpoint_forwarder -config my-config.yaml -p "备用端点"
+
+# 组合选项：不使用 TUI 并覆盖优先级
+./endpoint_forwarder -config my-config.yaml -no-tui -p "测试端点"
 ```
 
 ## 日志记录

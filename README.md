@@ -14,7 +14,8 @@ A high-performance Go application that transparently forwards Claude Code API re
 - **Retry & Fallback**: Exponential backoff with automatic endpoint fallback
 - **Monitoring**: Built-in health checks and Prometheus-style metrics
 - **Structured Logging**: Configurable JSON or text logging with multiple levels
-- **TUI Interface**: Built-in Terminal User Interface for real-time monitoring (enabled by default)
+- **TUI Interface**: Built-in Terminal User Interface for real-time monitoring with interactive priority editing (enabled by default)
+- **Dynamic Priority Override**: Runtime endpoint priority adjustment via `-p` parameter for testing and failover scenarios
 
 ## Quick Start
 
@@ -39,6 +40,9 @@ A high-performance Go application that transparently forwards Claude Code API re
    
    # Explicitly enable TUI (default behavior)
    ./endpoint_forwarder -config config/config.yaml --tui
+   
+   # Override endpoint priority at runtime (useful for testing or failover)
+   ./endpoint_forwarder -config config/config.yaml -p "endpoint-name"
    ```
 
 4. **Configure Claude Code**:
@@ -122,6 +126,13 @@ tui:
 - `1-5`: Jump directly to tab (1=Overview, 2=Endpoints, etc.)
 - `Ctrl+C`: Quit application
 - `Arrow Keys`: Navigate within views
+
+**Priority Editing (Endpoints Tab):**
+- `Enter`: Enter priority edit mode for real-time priority adjustment
+- `ESC`: Exit edit mode without saving changes
+- `Ctrl+S`: Save priority changes to configuration
+- `1-9`: Set priority for selected endpoint (in edit mode)
+- Visual indicators show current edit state and unsaved changes
 
 **Usage:**
 - When `enabled: false` (default): No authentication is required, requests pass through directly
@@ -303,6 +314,7 @@ Options:
 - `-version`: Show version information
 - `-tui`: Enable TUI interface (default: true)
 - `-no-tui`: Disable TUI interface (run in traditional console mode)
+- `-p "endpoint-name"`: Override endpoint priority (set specified endpoint as primary with priority 1)
 
 Examples:
 ```bash
@@ -314,6 +326,12 @@ Examples:
 
 # Show version information
 ./endpoint_forwarder -version
+
+# Override endpoint priority (useful for testing specific endpoints)
+./endpoint_forwarder -config my-config.yaml -p "backup-endpoint"
+
+# Combine options: run without TUI and override priority
+./endpoint_forwarder -config my-config.yaml -no-tui -p "test-endpoint"
 ```
 
 ## Logging

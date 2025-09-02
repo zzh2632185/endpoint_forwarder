@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/gdamore/tcell/v2"
@@ -39,6 +40,13 @@ type TUIApp struct {
 	ctx        context.Context
 	cancel     context.CancelFunc
 	running    bool
+	configPath string                 // Configuration file path
+	
+	// Edit mode state for priority editing
+	editMode        bool                // Whether we're in edit mode
+	tempPriorities  map[string]int      // Temporary priority changes in memory
+	isDirty         bool                // Whether there are unsaved changes
+	editMutex       sync.RWMutex        // Protects edit mode state
 }
 
 // Tab represents a tab in the TUI
@@ -48,7 +56,7 @@ type Tab struct {
 }
 
 // NewTUIApp creates a new TUI application
-func NewTUIApp(cfg *config.Config, endpointManager *endpoint.Manager, monitoringMiddleware *middleware.MonitoringMiddleware, startTime time.Time) *TUIApp {
+func NewTUIApp(cfg *config.Config, endpointManager *endpoint.Manager, monitoringMiddleware *middleware.MonitoringMiddleware, startTime time.Time, configPath string) *TUIApp {
 	app := tview.NewApplication()
 	ctx, cancel := context.WithCancel(context.Background())
 	
@@ -62,6 +70,10 @@ func NewTUIApp(cfg *config.Config, endpointManager *endpoint.Manager, monitoring
 		cancel:               cancel,
 		currentTab:           0,
 		running:              false,
+		configPath:           configPath,
+		tempPriorities:       make(map[string]int),
+		editMode:             false,
+		isDirty:              false,
 	}
 
 	// Create UI components
@@ -78,7 +90,8 @@ func (t *TUIApp) setupUI() {
 	// Create views
 	t.overviewView = NewOverviewView(t.monitoringMiddleware, t.endpointManager, t.startTime)
 	t.endpointsView = NewEndpointsView(t.monitoringMiddleware, t.endpointManager)
-	t.connectionsView = NewConnectionsView(t.monitoringMiddleware, t.cfg)
+	t.endpointsView.SetTUIApp(t)  // Set reference for edit mode functionality
+	t.connectionsView = NewConnectionsView(t.monitoringMiddleware, t.endpointManager, t.cfg)
 	t.logsView = NewLogsView()
 	t.configView = NewConfigView(t.cfg)
 
@@ -145,18 +158,61 @@ func (t *TUIApp) createHeaderFlex() *tview.Flex {
 
 // handleInput handles keyboard input for navigation
 func (t *TUIApp) handleInput(event *tcell.EventKey) *tcell.EventKey {
+	// Handle edit mode specific keys first (only in Endpoints tab)
+	if t.currentTab == 1 { // Endpoints tab
+		if t.IsInEditMode() {
+			// Edit mode is active
+			switch event.Key() {
+			case tcell.KeyEscape:
+				// Exit edit mode without saving
+				t.ExitEditMode()
+				return nil
+			case tcell.KeyCtrlS:
+				// Save changes to config
+				if err := t.SavePrioritiesToConfig(); err != nil {
+					t.AddLog("ERROR", fmt.Sprintf("保存配置失败: %v", err), "TUI")
+				}
+				return nil
+			}
+			
+			// Handle number keys for priority setting in edit mode
+			if event.Rune() >= '1' && event.Rune() <= '9' {
+				priority := int(event.Rune() - '0')
+				t.setSelectedEndpointPriority(priority)
+				return nil
+			}
+			
+			// Handle two-digit priorities (10-99) - requires holding shift for special chars
+			// For now, just support 1-9 in edit mode
+			
+		} else {
+			// Normal mode in Endpoints tab
+			switch event.Key() {
+			case tcell.KeyEnter:
+				// Enter edit mode
+				t.EnterEditMode()
+				return nil
+			}
+		}
+	}
+	
+	// Handle global navigation keys
 	switch event.Key() {
 	case tcell.KeyTab:
-		// Next tab
-		t.currentTab = (t.currentTab + 1) % len(t.tabs)
-		t.switchToTab(t.currentTab)
-		t.updateTabBar()
+		// Next tab (but only if not in edit mode)
+		if !t.IsInEditMode() {
+			t.currentTab = (t.currentTab + 1) % len(t.tabs)
+			t.switchToTab(t.currentTab)
+			t.updateTabBar()
+		}
 		return nil
 	case tcell.KeyBacktab:
-		// Previous tab
-		t.currentTab = (t.currentTab - 1 + len(t.tabs)) % len(t.tabs)
-		t.switchToTab(t.currentTab)
-		t.updateTabBar()
+		// Previous tab (but only if not in edit mode)
+		if !t.IsInEditMode() {
+			t.currentTab = (t.currentTab - 1 + len(t.tabs)) % len(t.tabs)
+			t.switchToTab(t.currentTab)
+			t.updateTabBar()
+		}
 		return nil
 	case tcell.KeyCtrlC:
 		// Quit application
@@ -164,8 +220,8 @@ func (t *TUIApp) handleInput(event *tcell.EventKey) *tcell.EventKey {
 		return nil
 	}
 
-	// Handle number keys for direct tab access
-	if event.Rune() >= '1' && event.Rune() <= '9' {
+	// Handle number keys for direct tab access (but not in edit mode)
+	if !t.IsInEditMode() && event.Rune() >= '1' && event.Rune() <= '9' {
 		tabIndex := int(event.Rune() - '1')
 		if tabIndex < len(t.tabs) {
 			t.currentTab = tabIndex
@@ -176,6 +232,39 @@ func (t *TUIApp) handleInput(event *tcell.EventKey) *tcell.EventKey {
 	}
 
 	return event
+}
+
+// setSelectedEndpointPriority sets priority for the currently selected endpoint
+func (t *TUIApp) setSelectedEndpointPriority(priority int) {
+	if t.endpointsView == nil {
+		return
+	}
+	
+	// Get the currently selected endpoint name
+	selectedEndpointName := t.getSelectedEndpointName()
+	if selectedEndpointName == "" {
+		t.AddLog("WARN", "没有选中的端点", "TUI")
+		return
+	}
+	
+	t.SetEndpointPriority(selectedEndpointName, priority)
+}
+
+// getSelectedEndpointName returns the name of the currently selected endpoint
+func (t *TUIApp) getSelectedEndpointName() string {
+	if t.endpointsView == nil {
+		return ""
+	}
+	
+	endpoints := t.endpointManager.GetAllEndpoints()
+	selectedRow := t.endpointsView.selectedRow
+	
+	// selectedRow is 1-based (0 is header), convert to 0-based endpoint index
+	if selectedRow > 0 && selectedRow <= len(endpoints) {
+		return endpoints[selectedRow-1].Config.Name
+	}
+	
+	return ""
 }
 
 // switchToTab switches to the specified tab
@@ -208,12 +297,22 @@ func (t *TUIApp) updateTabBar() {
 func (t *TUIApp) updateStatusBar() {
 	metrics := t.monitoringMiddleware.GetMetrics().GetMetrics()
 	
-	// Very simple status text for testing
+	// Basic status text
 	statusText := fmt.Sprintf("Requests: %d | Success: %.1f%% | Connections: %d",
 		metrics.TotalRequests,
 		metrics.GetSuccessRate(),
 		len(metrics.ActiveConnections),
 	)
+	
+	// Add edit mode indicator
+	if t.IsInEditMode() {
+		isDirty := ""
+		if t.HasUnsavedChanges() {
+			isDirty = " *"
+		}
+		statusText += fmt.Sprintf(" | [编辑模式%s]", isDirty)
+	}
+	
 	t.statusBar.SetText(statusText)
 }
 
@@ -323,4 +422,145 @@ func (t *TUIApp) Stop() {
 // IsRunning returns whether the TUI is currently running
 func (t *TUIApp) IsRunning() bool {
 	return t.running
+}
+
+// Edit mode methods for priority editing
+
+// EnterEditMode enters the priority edit mode
+func (t *TUIApp) EnterEditMode() {
+	t.editMutex.Lock()
+	defer t.editMutex.Unlock()
+	
+	if t.editMode {
+		return // Already in edit mode
+	}
+	
+	t.editMode = true
+	t.isDirty = false
+	
+	// Initialize temp priorities with current config values
+	for _, endpoint := range t.cfg.Endpoints {
+		t.tempPriorities[endpoint.Name] = endpoint.Priority
+	}
+	
+	// Add log entry
+	t.AddLog("INFO", "进入优先级编辑模式", "TUI")
+}
+
+// ExitEditMode exits the priority edit mode without saving changes
+func (t *TUIApp) ExitEditMode() {
+	t.editMutex.Lock()
+	defer t.editMutex.Unlock()
+	
+	if !t.editMode {
+		return // Not in edit mode
+	}
+	
+	t.editMode = false
+	t.isDirty = false
+	
+	// Clear temp priorities
+	t.tempPriorities = make(map[string]int)
+	
+	// Add log entry
+	t.AddLog("INFO", "退出优先级编辑模式", "TUI")
+}
+
+// IsInEditMode returns whether we're currently in edit mode
+func (t *TUIApp) IsInEditMode() bool {
+	t.editMutex.RLock()
+	defer t.editMutex.RUnlock()
+	return t.editMode
+}
+
+// SetEndpointPriority sets the priority for an endpoint in edit mode
+func (t *TUIApp) SetEndpointPriority(endpointName string, priority int) {
+	t.editMutex.Lock()
+	defer t.editMutex.Unlock()
+	
+	if !t.editMode {
+		return // Not in edit mode
+	}
+	
+	// Validate priority range
+	if priority < 1 || priority > 99 {
+		t.AddLog("WARN", fmt.Sprintf("优先级超出范围 (1-99): %d", priority), "TUI")
+		return
+	}
+	
+	oldPriority := t.tempPriorities[endpointName]
+	t.tempPriorities[endpointName] = priority
+	t.isDirty = true
+	
+	t.AddLog("INFO", fmt.Sprintf("端点 %s 优先级: %d -> %d", endpointName, oldPriority, priority), "TUI")
+}
+
+// GetEffectivePriority returns the effective priority for an endpoint (temp or config)
+func (t *TUIApp) GetEffectivePriority(endpointName string) int {
+	t.editMutex.RLock()
+	defer t.editMutex.RUnlock()
+	
+	if t.editMode {
+		if priority, exists := t.tempPriorities[endpointName]; exists {
+			return priority
+		}
+	}
+	
+	// Return original config priority
+	for _, endpoint := range t.cfg.Endpoints {
+		if endpoint.Name == endpointName {
+			return endpoint.Priority
+		}
+	}
+	
+	return 999 // Default high priority if not found
+}
+
+// HasUnsavedChanges returns whether there are unsaved changes
+func (t *TUIApp) HasUnsavedChanges() bool {
+	t.editMutex.RLock()
+	defer t.editMutex.RUnlock()
+	return t.editMode && t.isDirty
+}
+
+// IsSaveEnabled returns whether saving to config file is enabled
+func (t *TUIApp) IsSaveEnabled() bool {
+	return t.cfg.TUI.SavePriorityEdits
+}
+
+// SavePrioritiesToConfig saves the temporary priorities to the config file
+func (t *TUIApp) SavePrioritiesToConfig() error {
+	t.editMutex.Lock()
+	defer t.editMutex.Unlock()
+	
+	if !t.editMode || !t.isDirty {
+		return nil // Nothing to save
+	}
+	
+	// Apply temp priorities to the config
+	for i := range t.cfg.Endpoints {
+		endpointName := t.cfg.Endpoints[i].Name
+		if newPriority, exists := t.tempPriorities[endpointName]; exists {
+			t.cfg.Endpoints[i].Priority = newPriority
+		}
+	}
+	
+	// **关键修复**: 同步配置到EndpointManager
+	t.endpointManager.UpdateConfig(t.cfg)
+	
+	// 检查是否允许保存到配置文件
+	if t.cfg.TUI.SavePriorityEdits {
+		// 保存到配置文件（保留注释）
+		if err := config.SavePriorityConfigWithComments(t.cfg, t.configPath); err != nil {
+			t.AddLog("ERROR", fmt.Sprintf("保存配置文件失败: %v", err), "TUI")
+			return err
+		}
+		t.AddLog("INFO", "配置已保存到文件并同步到路由系统，优先级更改已生效", "TUI")
+	} else {
+		t.AddLog("INFO", "优先级更改已应用到内存（配置文件保存已禁用）", "TUI")
+	}
+	
+	t.isDirty = false
+	
+	return nil
 }
