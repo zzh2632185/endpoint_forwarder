@@ -12,6 +12,7 @@ A high-performance Go application that transparently forwards Claude Code API re
 - **Routing Strategies**: Priority-based or fastest-response routing
 - **Health Checking**: Automatic endpoint health monitoring
 - **Retry & Fallback**: Exponential backoff with automatic endpoint fallback
+- **Group Management**: Intelligent endpoint grouping with automatic failover and cooldown periods
 - **Monitoring**: Built-in health checks and Prometheus-style metrics
 - **Structured Logging**: Configurable JSON or text logging with multiple levels
 - **TUI Interface**: Built-in Terminal User Interface for real-time monitoring with interactive priority editing (enabled by default)
@@ -87,6 +88,72 @@ health:
   timeout: "5s"             # Health check timeout
   health_path: "/v1/models" # Health check endpoint path
 ```
+
+### Group Management Configuration
+```yaml
+group:
+  cooldown: "600s"           # Group cooldown duration when all endpoints fail (default: 10 minutes)
+```
+
+The system supports intelligent endpoint grouping with automatic failover and cooldown mechanisms:
+
+**Group Configuration Features:**
+- **Priority-based Groups**: Groups have priorities (lower number = higher priority)
+- **Automatic Failover**: When all endpoints in a group fail, system switches to next priority group
+- **Cooldown Periods**: Failed groups enter cooldown mode before being reconsidered
+- **Inheritance**: Endpoints inherit group settings from previous endpoints
+- **Single Active Group**: Only one group is active at a time for deterministic routing
+
+**Group Behavior:**
+- **Active Group Selection**: Highest priority group not in cooldown becomes active
+- **Cooldown Trigger**: When all endpoints in a group fail, the group enters cooldown
+- **Automatic Recovery**: Groups automatically reactivate after cooldown period expires
+- **Priority-based Routing**: Requests only go to endpoints in the active group
+
+**Group Configuration Example:**
+```yaml
+endpoints:
+  # Primary group (highest priority)
+  - name: "primary"
+    url: "https://api.openai.com"
+    group: "main"           # Group name
+    group-priority: 1       # Group priority (1 = highest)
+    priority: 1             # Priority within group
+    token: "sk-your-api-key"
+    
+  # Backup endpoint in primary group
+  - name: "primary_backup"
+    url: "https://api.anthropic.com"
+    priority: 2
+    # Inherits group: "main" and group-priority: 1
+    
+  # Secondary group (lower priority)
+  - name: "secondary"
+    url: "https://api.example.com"
+    group: "backup"         # Different group
+    group-priority: 2       # Lower priority
+    priority: 1
+    token: "sk-different-key"
+    
+  # Tertiary group (lowest priority)
+  - name: "local"
+    url: "http://localhost:11434"
+    group: "local"
+    group-priority: 3       # Lowest priority
+    priority: 1
+    # No token needed for local service
+```
+
+**Group Inheritance Rules:**
+- Endpoints inherit `group` and `group-priority` from previous endpoints if not specified
+- First endpoint in a group defines the inherited settings for subsequent endpoints
+- Group inheritance works independently of parameter inheritance (token, headers, etc.)
+
+**Use Cases:**
+- **High Availability**: Primary/backup group setup for critical services
+- **Cost Optimization**: Use different providers based on priority (e.g., GPT-4 → Claude → Local)
+- **Geographic Routing**: Group endpoints by region with automatic failover
+- **Load Balancing**: Distribute load across multiple groups with different priorities
 
 ### Global Timeout Configuration
 ```yaml
@@ -289,18 +356,20 @@ curl http://localhost:8080/metrics
 ## How It Works
 
 1. **Request Reception**: The forwarder receives HTTP requests on the configured port
-2. **Endpoint Selection**: Based on the configured strategy (priority/fastest), selects the best available healthy endpoint
-3. **Request Forwarding**: Transparently forwards the request with proper header handling:
+2. **Group Selection**: Based on group priorities and cooldown status, selects the active group
+3. **Endpoint Selection**: Within the active group, selects the best available endpoint based on the configured strategy (priority/fastest)
+4. **Request Forwarding**: Transparently forwards the request with proper header handling:
    - **Host Header**: Automatically set to match the target endpoint's hostname
    - **Authorization**: Override/inject tokens as configured, remove client tokens
    - **Security**: Automatically strips sensitive client headers (`X-API-Key`, `Authorization`)
    - **Custom Headers**: Add endpoint-specific headers as configured
    - **Original Headers**: Preserve all other headers from the original request
-4. **Response Handling**: 
+5. **Response Handling**: 
    - Regular requests: Buffers and forwards the complete response
    - SSE requests: Streams response in real-time with proper event handling
-5. **Error Handling**: On failure, automatically retries with exponential backoff, then falls back to the next available endpoint
-6. **Health Monitoring**: Continuously monitors endpoint health and adjusts routing accordingly
+6. **Error Handling**: On failure, automatically retries with exponential backoff, then falls back to the next available endpoint within the active group
+7. **Group Management**: If all endpoints in the active group fail, the group enters cooldown and system switches to the next priority group
+8. **Health Monitoring**: Continuously monitors endpoint health and adjusts routing accordingly
 
 ## Command Line Options
 
