@@ -74,7 +74,8 @@ type StreamingConfig struct {
 }
 
 type GroupConfig struct {
-	Cooldown time.Duration `yaml:"cooldown"` // Cooldown duration for groups when all endpoints fail
+	Cooldown       time.Duration `yaml:"cooldown"` // Cooldown duration for groups when all endpoints fail
+	MaxRetries     int           `yaml:"max_retries"` // Maximum retry attempts per group before cooldown
 }
 
 type ProxyConfig struct {
@@ -208,7 +209,10 @@ func (c *Config) setDefaults() {
 
 	// Set group defaults
 	if c.Group.Cooldown == 0 {
-		c.Group.Cooldown = 600 * time.Second // Default 1 minute cooldown for groups
+		c.Group.Cooldown = 600 * time.Second // Default 10 minutes cooldown for groups
+	}
+	if c.Group.MaxRetries == 0 {
+		c.Group.MaxRetries = 3 // Default 3 retry attempts per group
 	}
 
 	// Set TUI defaults

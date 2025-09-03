@@ -93,6 +93,7 @@ health:
 ```yaml
 group:
   cooldown: "600s"           # Group cooldown duration when all endpoints fail (default: 10 minutes)
+  max_retries: 3             # Maximum retry attempts per group before cooldown (default: 3)
 ```
 
 The system supports intelligent endpoint grouping with automatic failover and cooldown mechanisms, plus dynamic key resolution:
@@ -108,6 +109,8 @@ The system supports intelligent endpoint grouping with automatic failover and co
 **Group Behavior:**
 - **Active Group Selection**: Highest priority group not in cooldown becomes active
 - **Cooldown Trigger**: When all endpoints in a group fail, the group enters cooldown
+- **Retry Limit**: Groups have a maximum retry count before entering cooldown
+- **Retry Tracking**: System tracks retry counts per group and resets on successful requests
 - **Automatic Recovery**: Groups automatically reactivate after cooldown period expires
 - **Priority-based Routing**: Requests only go to endpoints in the active group
 
@@ -425,8 +428,13 @@ curl http://localhost:8080/metrics
    - Regular requests: Buffers and forwards the complete response
    - SSE requests: Streams response in real-time with proper event handling
 6. **Error Handling**: On failure, automatically retries with exponential backoff, then falls back to the next available endpoint within the active group
-7. **Group Management**: If all endpoints in the active group fail, the group enters cooldown and system switches to the next priority group
-8. **Health Monitoring**: Continuously monitors endpoint health and adjusts routing accordingly
+7. **Group Retry Management**: 
+   - Increments group retry count when all endpoints in a group fail
+   - Enters cooldown when retry count exceeds `max_retries` limit
+   - Resets retry count to 0 when group successfully processes a request
+   - Group is unavailable during cooldown, automatically recovers after cooldown period
+8. **Group Management**: If all endpoints in the active group fail or exceed retry limit, the group enters cooldown and system switches to the next priority group
+9. **Health Monitoring**: Continuously monitors endpoint health and adjusts routing accordingly
 
 ## Command Line Options
 

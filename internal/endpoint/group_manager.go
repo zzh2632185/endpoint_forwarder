@@ -17,6 +17,8 @@ type GroupInfo struct {
 	IsActive     bool
 	CooldownUntil time.Time
 	Endpoints    []*Endpoint
+	RetryCount   int           // Current retry count for this group
+	MaxRetries   int           // Maximum retries before cooldown
 }
 
 // GroupManager manages endpoint groups and their cooldown states
@@ -43,6 +45,11 @@ func (gm *GroupManager) UpdateConfig(cfg *config.Config) {
 	
 	gm.config = cfg
 	gm.cooldownDuration = cfg.Group.Cooldown
+	
+	// Update max retries for all groups
+	for _, group := range gm.groups {
+		group.MaxRetries = cfg.Group.MaxRetries
+	}
 }
 
 // UpdateGroups rebuilds group information from endpoints
@@ -61,6 +68,8 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 				IsActive:     false,
 				CooldownUntil: group.CooldownUntil,
 				Endpoints:    nil, // Will be updated
+				RetryCount:   group.RetryCount,
+				MaxRetries:   group.MaxRetries,
 			}
 		}
 	}
@@ -77,8 +86,10 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 		if _, exists := newGroups[groupName]; !exists {
 			// Check if this group was in cooldown
 			var cooldownUntil time.Time
+			var retryCount int
 			if oldGroup, hadCooldown := oldGroups[groupName]; hadCooldown {
 				cooldownUntil = oldGroup.CooldownUntil
+				retryCount = oldGroup.RetryCount
 			}
 			
 			newGroups[groupName] = &GroupInfo{
@@ -87,6 +98,8 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 				IsActive:     cooldownUntil.IsZero() || time.Now().After(cooldownUntil),
 				CooldownUntil: cooldownUntil,
 				Endpoints:    make([]*Endpoint, 0),
+				RetryCount:   retryCount,
+				MaxRetries:   gm.config.Group.MaxRetries,
 			}
 		}
 		
@@ -271,4 +284,65 @@ func (gm *GroupManager) FilterEndpointsByActiveGroups(endpoints []*Endpoint) []*
 	}
 	
 	return filtered
+}
+
+// IncrementGroupRetry increments the retry count for a group
+// Returns true if the group should enter cooldown, false otherwise
+func (gm *GroupManager) IncrementGroupRetry(groupName string) bool {
+	gm.mutex.Lock()
+	defer gm.mutex.Unlock()
+	
+	if group, exists := gm.groups[groupName]; exists {
+		group.RetryCount++
+		
+		slog.Warn(fmt.Sprintf("🔄 [组重试] 组 %s 重试次数: %d/%d", 
+			groupName, group.RetryCount, group.MaxRetries))
+		
+		// Check if we've exceeded the max retry count
+		if group.RetryCount > group.MaxRetries {
+			slog.Error(fmt.Sprintf("❌ [组重试] 组 %s 超过最大重试次数 %d，进入冷却状态", 
+				groupName, group.MaxRetries))
+			return true
+		}
+	}
+	
+	return false
+}
+
+// ResetGroupRetry resets the retry count for a group (typically on success)
+func (gm *GroupManager) ResetGroupRetry(groupName string) {
+	gm.mutex.Lock()
+	defer gm.mutex.Unlock()
+	
+	if group, exists := gm.groups[groupName]; exists {
+		if group.RetryCount > 0 {
+			slog.Info(fmt.Sprintf("✅ [组重试] 组 %s 重置重试计数: %d → 0", 
+				groupName, group.RetryCount))
+			group.RetryCount = 0
+		}
+	}
+}
+
+// GetGroupRetryCount returns the current retry count for a group
+func (gm *GroupManager) GetGroupRetryCount(groupName string) int {
+	gm.mutex.RLock()
+	defer gm.mutex.RUnlock()
+	
+	if group, exists := gm.groups[groupName]; exists {
+		return group.RetryCount
+	}
+	
+	return 0
+}
+
+// GetGroupMaxRetries returns the maximum retry count for a group
+func (gm *GroupManager) GetGroupMaxRetries(groupName string) int {
+	gm.mutex.RLock()
+	defer gm.mutex.RUnlock()
+	
+	if group, exists := gm.groups[groupName]; exists {
+		return group.MaxRetries
+	}
+	
+	return gm.config.Group.MaxRetries
 }

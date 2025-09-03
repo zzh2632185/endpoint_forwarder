@@ -49,6 +49,7 @@ streaming:
 # 组管理配置
 group:
   cooldown: "600s"           # 组失败后的冷却时间，默认: 600s
+  max_retries: 3             # 组最大重试次数，超过后进入冷却，默认: 3
 
 # 全局超时配置
 global_timeout: "300s"       # 非流式请求的全局默认超时时间，默认: 300s (5分钟)

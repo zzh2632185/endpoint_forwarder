@@ -73,6 +73,9 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 	// Track groups that have been put into cooldown during this request
 	groupsSetToCooldownThisRequest := make(map[string]bool)
 	
+	// Track groups that we've successfully processed in this request
+	groupsProcessedThisRequest := make(map[string]bool)
+	
 	for {
 		// Get healthy endpoints with real-time testing if enabled (dynamic refresh)
 		var endpoints []*endpoint.Endpoint
@@ -137,6 +140,13 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 						// Success or non-retryable error - return the response
 						slog.InfoContext(ctxWithEndpoint, fmt.Sprintf("✅ [请求成功] 端点: %s (组: %s), 状态码: %d (总尝试 %d 个端点)", 
 							ep.Config.Name, groupName, resp.StatusCode, totalEndpointsAttempted))
+						
+						// Reset retry count for this group on success
+						if !groupsProcessedThisRequest[groupName] {
+							rh.endpointManager.GetGroupManager().ResetGroupRetry(groupName)
+							groupsProcessedThisRequest[groupName] = true
+						}
+						
 						return resp, nil
 					}
 					
@@ -210,12 +220,19 @@ func (rh *RetryHandler) ExecuteWithContext(ctx context.Context, operation Operat
 			}
 		}
 		
-		// After trying all endpoints in current iteration, put failed groups into cooldown
+		// After trying all endpoints in current iteration, handle failed groups
 		for groupName := range groupsFailedThisIteration {
 			if !groupsSetToCooldownThisRequest[groupName] {
-				slog.WarnContext(ctx, fmt.Sprintf("❄️ [组失败] 组 %s 中所有端点均已失败，将组设置为冷却状态", groupName))
-				rh.endpointManager.GetGroupManager().SetGroupCooldown(groupName)
-				groupsSetToCooldownThisRequest[groupName] = true
+				// Increment retry count for this group
+				shouldCooldown := rh.endpointManager.GetGroupManager().IncrementGroupRetry(groupName)
+				
+				if shouldCooldown {
+					slog.ErrorContext(ctx, fmt.Sprintf("❄️ [组重试超限] 组 %s 超过最大重试次数，进入冷却状态", groupName))
+					rh.endpointManager.GetGroupManager().SetGroupCooldown(groupName)
+					groupsSetToCooldownThisRequest[groupName] = true
+				} else {
+					slog.WarnContext(ctx, fmt.Sprintf("⚠️ [组失败] 组 %s 中所有端点均已失败，但未达到重试限制", groupName))
+				}
 			}
 		}
 		

@@ -84,6 +84,8 @@ The system supports endpoint grouping with automatic failover and cooldown mecha
 - **Cooldown**: When all endpoints in a group fail, the group enters cooldown mode
 - **Automatic Failover**: System automatically switches to next priority group when active group fails
 - **Cooldown Duration**: Configurable via `group.cooldown` (default: 10 minutes)
+- **Retry Limit**: Groups have a maximum retry count via `group.max_retries` (default: 3). When exceeded, the group enters cooldown
+- **Retry Tracking**: System tracks retry counts per group and resets on successful requests
 
 **Group Inheritance Rules**:
 - Endpoints inherit `group` and `group-priority` from previous endpoints if not specified
