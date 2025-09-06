@@ -53,3 +53,5 @@ config/*config*.yaml
 
 .augment/
 config/registry.yaml
+AGENTS.md
+config/registry.yaml

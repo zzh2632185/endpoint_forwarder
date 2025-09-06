@@ -1,21 +1,25 @@
 package webui
 
 import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"io"
-	"log/slog"
-	"net/http"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
+    "archive/zip"
+    "bytes"
+    "context"
+    "encoding/json"
+    "fmt"
+    "io"
+    "log/slog"
+    "net/http"
+    "os"
+    "path/filepath"
+    "strings"
+    "sync"
+    "time"
 
-	"endpoint_forwarder/config"
-	"endpoint_forwarder/internal/endpoint"
-	"endpoint_forwarder/internal/middleware"
-	"endpoint_forwarder/internal/monitor"
+    "endpoint_forwarder/config"
+    "endpoint_forwarder/internal/endpoint"
+    "endpoint_forwarder/internal/middleware"
+    "endpoint_forwarder/internal/monitor"
+    yaml "gopkg.in/yaml.v3"
 )
 
 // LogEntry represents a log entry for WebUI
@@ -209,13 +213,17 @@ func (w *WebUIServer) Start() error {
 	mux.HandleFunc("/api/endpoints/details", w.authMiddleware.RequireAuth(w.handleEndpointDetails))
 	mux.HandleFunc("/api/overview/token-history", w.authMiddleware.RequireAuth(w.handleTokenHistory))
 
-	// Protected Configuration management endpoints
-	mux.HandleFunc("/api/configs", w.authMiddleware.RequireAuth(w.handleConfigs))
-	mux.HandleFunc("/api/configs/import", w.authMiddleware.RequireAuth(w.handleConfigImport))
-	mux.HandleFunc("/api/configs/switch", w.authMiddleware.RequireAuth(w.handleConfigSwitch))
-	mux.HandleFunc("/api/configs/delete", w.authMiddleware.RequireAuth(w.handleConfigDelete))
-	mux.HandleFunc("/api/configs/rename", w.authMiddleware.RequireAuth(w.handleConfigRename))
-	mux.HandleFunc("/api/configs/active", w.authMiddleware.RequireAuth(w.handleActiveConfig))
+    // Protected Configuration management endpoints
+    mux.HandleFunc("/api/configs", w.authMiddleware.RequireAuth(w.handleConfigs))
+    mux.HandleFunc("/api/configs/import", w.authMiddleware.RequireAuth(w.handleConfigImport))
+    mux.HandleFunc("/api/configs/switch", w.authMiddleware.RequireAuth(w.handleConfigSwitch))
+    mux.HandleFunc("/api/configs/delete", w.authMiddleware.RequireAuth(w.handleConfigDelete))
+    mux.HandleFunc("/api/configs/rename", w.authMiddleware.RequireAuth(w.handleConfigRename))
+    mux.HandleFunc("/api/configs/active", w.authMiddleware.RequireAuth(w.handleActiveConfig))
+    // New: config file content + export endpoints
+    mux.HandleFunc("/api/configs/content", w.authMiddleware.RequireAuth(w.handleConfigContent))
+    mux.HandleFunc("/api/configs/export", w.authMiddleware.RequireAuth(w.handleConfigExport))
+    mux.HandleFunc("/api/configs/export-all", w.authMiddleware.RequireAuth(w.handleConfigExportAll))
 
 	w.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", w.cfg.WebUI.Host, w.cfg.WebUI.Port),
@@ -1055,68 +1063,249 @@ func (w *WebUIServer) handleConfigDelete(rw http.ResponseWriter, r *http.Request
 
 // handleConfigRename handles configuration renaming
 func (w *WebUIServer) handleConfigRename(rw http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPut {
-		http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+    if r.Method != http.MethodPut {
+        http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
 
-	var request struct {
-		OldName string `json:"oldName"`
-		NewName string `json:"newName"`
-	}
+    var request struct {
+        OldName string `json:"oldName"`
+        NewName string `json:"newName"`
+    }
 
-	if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-		http.Error(rw, "Invalid request body", http.StatusBadRequest)
-		return
-	}
+    if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+        http.Error(rw, "Invalid request body", http.StatusBadRequest)
+        return
+    }
 
-	if request.OldName == "" || request.NewName == "" {
-		http.Error(rw, "Both old name and new name are required", http.StatusBadRequest)
-		return
-	}
+    if request.OldName == "" || request.NewName == "" {
+        http.Error(rw, "Both old name and new name are required", http.StatusBadRequest)
+        return
+    }
 
-	// Get config metadata before renaming
-	configMeta, err := w.configRegistry.GetConfig(request.OldName)
-	if err != nil {
-		http.Error(rw, fmt.Sprintf("Configuration not found: %s", request.OldName), http.StatusNotFound)
-		return
-	}
+    // Get config metadata before renaming
+    configMeta, err := w.configRegistry.GetConfig(request.OldName)
+    if err != nil {
+        http.Error(rw, fmt.Sprintf("Configuration not found: %s", request.OldName), http.StatusNotFound)
+        return
+    }
 
-	// Rename in registry
-	if err := w.configRegistry.RenameConfig(request.OldName, request.NewName); err != nil {
-		http.Error(rw, fmt.Sprintf("Failed to rename config: %v", err), http.StatusBadRequest)
-		return
-	}
+    // Rename in registry
+    if err := w.configRegistry.RenameConfig(request.OldName, request.NewName); err != nil {
+        http.Error(rw, fmt.Sprintf("Failed to rename config: %v", err), http.StatusBadRequest)
+        return
+    }
 
-	// Generate new file path
-	newFileName := fmt.Sprintf("config_%s.yaml", request.NewName)
-	newFilePath := filepath.Join(w.configDir, newFileName)
+    // Generate new file path
+    newFileName := fmt.Sprintf("config_%s.yaml", request.NewName)
+    newFilePath := filepath.Join(w.configDir, newFileName)
 
-	// Rename config file
-	if err := os.Rename(configMeta.FilePath, newFilePath); err != nil {
-		// Rollback registry change
-		w.configRegistry.RenameConfig(request.NewName, request.OldName)
-		http.Error(rw, fmt.Sprintf("Failed to rename config file: %v", err), http.StatusInternalServerError)
-		return
-	}
+    // Rename config file
+    if err := os.Rename(configMeta.FilePath, newFilePath); err != nil {
+        // Rollback registry change
+        w.configRegistry.RenameConfig(request.NewName, request.OldName)
+        http.Error(rw, fmt.Sprintf("Failed to rename config file: %v", err), http.StatusInternalServerError)
+        return
+    }
 
-	// Update file path in registry
-	updatedMeta, _ := w.configRegistry.GetConfig(request.NewName)
-	updatedMeta.FilePath = newFilePath
-	w.configRegistry.AddConfig(*updatedMeta)
+    // Update file path in registry
+    updatedMeta, _ := w.configRegistry.GetConfig(request.NewName)
+    updatedMeta.FilePath = newFilePath
+    w.configRegistry.AddConfig(*updatedMeta)
 
-	// Save registry
-	if err := w.configRegistry.Save(w.registryPath); err != nil {
-		w.logger.Error("Failed to save registry", "error", err)
-		http.Error(rw, "Failed to save registry", http.StatusInternalServerError)
-		return
-	}
+    // Save registry
+    if err := w.configRegistry.Save(w.registryPath); err != nil {
+        w.logger.Error("Failed to save registry", "error", err)
+        http.Error(rw, "Failed to save registry", http.StatusInternalServerError)
+        return
+    }
 
-	w.logger.Info("Config renamed successfully", "oldName", request.OldName, "newName", request.NewName)
+    w.logger.Info("Config renamed successfully", "oldName", request.OldName, "newName", request.NewName)
 
-	rw.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(rw).Encode(map[string]interface{}{
-		"success": true,
-		"message": fmt.Sprintf("Configuration renamed from '%s' to '%s'", request.OldName, request.NewName),
-	})
+    rw.Header().Set("Content-Type", "application/json")
+    json.NewEncoder(rw).Encode(map[string]interface{}{
+        "success": true,
+        "message": fmt.Sprintf("Configuration renamed from '%s' to '%s'", request.OldName, request.NewName),
+    })
+}
+
+// handleConfigContent supports getting and updating raw YAML of a configuration
+// GET  /api/configs/content?name={configName} -> { success, name, content }
+// PUT  /api/configs/content { name, content } -> { success }
+func (w *WebUIServer) handleConfigContent(rw http.ResponseWriter, r *http.Request) {
+    switch r.Method {
+    case http.MethodGet:
+        name := r.URL.Query().Get("name")
+        if name == "" {
+            http.Error(rw, "Config name is required", http.StatusBadRequest)
+            return
+        }
+
+        meta, err := w.configRegistry.GetConfig(name)
+        if err != nil {
+            http.Error(rw, fmt.Sprintf("Configuration not found: %s", name), http.StatusNotFound)
+            return
+        }
+
+        data, err := os.ReadFile(meta.FilePath)
+        if err != nil {
+            w.logger.Error("Failed to read config file", "error", err, "path", meta.FilePath)
+            http.Error(rw, "Failed to read config", http.StatusInternalServerError)
+            return
+        }
+
+        rw.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(rw).Encode(map[string]any{
+            "success": true,
+            "name":    name,
+            "content": string(data),
+        })
+        return
+
+    case http.MethodPut:
+        var req struct {
+            Name    string `json:"name"`
+            Content string `json:"content"`
+        }
+        if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+            http.Error(rw, "Invalid request body", http.StatusBadRequest)
+            return
+        }
+        if strings.TrimSpace(req.Name) == "" {
+            http.Error(rw, "Config name is required", http.StatusBadRequest)
+            return
+        }
+
+        meta, err := w.configRegistry.GetConfig(req.Name)
+        if err != nil {
+            http.Error(rw, fmt.Sprintf("Configuration not found: %s", req.Name), http.StatusNotFound)
+            return
+        }
+
+        // Validate YAML syntax by unmarshalling
+        var syntaxCheck any
+        if err := yaml.Unmarshal([]byte(req.Content), &syntaxCheck); err != nil {
+            http.Error(rw, fmt.Sprintf("Invalid YAML: %v", err), http.StatusBadRequest)
+            return
+        }
+
+        // Write back to file
+        if err := os.WriteFile(meta.FilePath, []byte(req.Content), 0644); err != nil {
+            w.logger.Error("Failed to write config file", "error", err, "path", meta.FilePath)
+            http.Error(rw, "Failed to save config", http.StatusInternalServerError)
+            return
+        }
+
+        // Update registry metadata (UpdatedAt)
+        meta.UpdatedAt = time.Now()
+        w.configRegistry.AddConfig(*meta)
+        if err := w.configRegistry.Save(w.registryPath); err != nil {
+            w.logger.Warn("Failed to save registry after edit", "error", err)
+        }
+
+        // If this is the active config, the file watcher will reload automatically
+        rw.Header().Set("Content-Type", "application/json")
+        json.NewEncoder(rw).Encode(map[string]any{
+            "success": true,
+            "message": "Configuration saved",
+            "active":  meta.IsActive,
+        })
+        return
+
+    default:
+        http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+}
+
+// handleConfigExport streams a single YAML config file to the client
+func (w *WebUIServer) handleConfigExport(rw http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodGet {
+        http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    name := r.URL.Query().Get("name")
+    if name == "" {
+        http.Error(rw, "Config name is required", http.StatusBadRequest)
+        return
+    }
+
+    meta, err := w.configRegistry.GetConfig(name)
+    if err != nil {
+        http.Error(rw, fmt.Sprintf("Configuration not found: %s", name), http.StatusNotFound)
+        return
+    }
+
+    data, err := os.ReadFile(meta.FilePath)
+    if err != nil {
+        w.logger.Error("Failed to read config for export", "error", err, "path", meta.FilePath)
+        http.Error(rw, "Failed to read config", http.StatusInternalServerError)
+        return
+    }
+
+    fileName := fmt.Sprintf("%s.yaml", strings.TrimSpace(name))
+    rw.Header().Set("Content-Type", "application/x-yaml")
+    rw.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
+    rw.WriteHeader(http.StatusOK)
+    rw.Write(data)
+}
+
+// handleConfigExportAll exports all known configuration YAMLs in a single ZIP
+func (w *WebUIServer) handleConfigExportAll(rw http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodGet {
+        http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    configs := w.configRegistry.GetAllConfigs()
+    if len(configs) == 0 {
+        http.Error(rw, "No configurations to export", http.StatusNotFound)
+        return
+    }
+
+    var buf bytes.Buffer
+    zw := zip.NewWriter(&buf)
+
+    for _, meta := range configs {
+        // Skip files that don't exist
+        if _, err := os.Stat(meta.FilePath); err != nil {
+            continue
+        }
+
+        data, err := os.ReadFile(meta.FilePath)
+        if err != nil {
+            w.logger.Warn("Skip config in export due to read error", "name", meta.Name, "error", err)
+            continue
+        }
+
+        entryName := fmt.Sprintf("config_%s.yaml", strings.TrimSpace(meta.Name))
+        f, err := zw.Create(entryName)
+        if err != nil {
+            w.logger.Warn("Failed to add file to zip", "name", meta.Name, "error", err)
+            continue
+        }
+        if _, err := f.Write(data); err != nil {
+            w.logger.Warn("Failed writing file to zip", "name", meta.Name, "error", err)
+            continue
+        }
+    }
+
+    // Optionally include registry to retain metadata
+    if _, err := os.Stat(w.registryPath); err == nil {
+        regData, err := os.ReadFile(w.registryPath)
+        if err == nil {
+            if f, err := zw.Create("registry.yaml"); err == nil {
+                f.Write(regData)
+            }
+        }
+    }
+
+    _ = zw.Close()
+
+    fileName := fmt.Sprintf("configs_%d.zip", time.Now().Unix())
+    rw.Header().Set("Content-Type", "application/zip")
+    rw.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", fileName))
+    rw.WriteHeader(http.StatusOK)
+    rw.Write(buf.Bytes())
 }

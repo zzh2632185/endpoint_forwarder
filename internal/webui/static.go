@@ -277,6 +277,7 @@ const indexHTML = `<!DOCTYPE html>
                                 <span class="label">当前配置：</span>
                                 <strong id="current-config-name">加载中...</strong>
                                 <button id="refresh-configs" onclick="app.loadConfigs()">🔄 刷新</button>
+                                <button id="export-all-configs" onclick="app.exportAllConfigs()">📦 批量导出</button>
                             </div>
 
                             <!-- 配置导入区域 -->
@@ -301,6 +302,24 @@ const indexHTML = `<!DOCTYPE html>
                 </div>
             </div>
         </main>
+    </div>
+
+    <!-- 配置编辑器模态框 -->
+    <div id="config-editor-modal" class="modal" style="display:none;">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="config-editor-title">编辑配置</h3>
+                <button class="modal-close" onclick="app.closeConfigEditor()">×</button>
+            </div>
+            <div class="modal-body">
+                <textarea id="config-editor-content" spellcheck="false" style="width:100%;height:360px;font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 13px; background:#0b1220; color:#e2e8f0; border:1px solid #334155; border-radius:8px; padding:12px; line-height:1.4;"></textarea>
+                <div id="config-editor-error" style="display:none;color:#ef4444;margin-top:8px;"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="app.closeConfigEditor()">取消</button>
+                <button class="btn btn-success" onclick="app.saveConfigEditor()">💾 保存并应用</button>
+            </div>
+        </div>
     </div>
 
     <script src="/static/app.js"></script>
@@ -328,6 +347,45 @@ body {
     margin: 0 auto;
     padding: 20px;
     overflow-x: hidden;
+}
+
+/* Modal styles */
+.modal {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(15, 23, 42, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+}
+.modal-content {
+    width: 80%;
+    max-width: 900px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    border-radius: 10px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.4);
+}
+.modal-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 12px 16px;
+    border-bottom: 1px solid #334155;
+}
+.modal-header h3 { margin: 0; }
+.modal-close {
+    background: transparent;
+    border: none;
+    color: #94a3b8;
+    font-size: 24px;
+    cursor: pointer;
+}
+.modal-footer {
+    display: flex; gap: 10px; justify-content: flex-end;
+    padding: 12px 16px;
+    border-top: 1px solid #334155;
 }
 
 .header {
@@ -1485,6 +1543,7 @@ class WebUIApp {
         this.originalPriorities = {};
         this.currentPriorities = {};
         this.hasUnsavedChanges = false;
+        this.editingConfigName = null; // for config editor
 
         this.init();
     }
@@ -2609,6 +2668,8 @@ class WebUIApp {
                                 ` + "${isActive ? 'disabled' : ''}" + `>
                             ` + "${isActive ? '当前配置' : '切换'}" + `
                         </button>
+                        <button class="rename-btn" onclick="app.openConfigEditor('` + "${this.escapeHtml(config.name)}" + `')">编辑</button>
+                        <button class="rename-btn" onclick="app.exportConfig('` + "${this.escapeHtml(config.name)}" + `')">导出</button>
                         <button class="rename-btn" onclick="app.renameConfig('` + "${this.escapeHtml(config.name)}" + `')">
                             重命名
                         </button>
@@ -2769,6 +2830,97 @@ class WebUIApp {
         } catch (error) {
             console.error('Error renaming config:', error);
             this.showMessage('❌ 重命名失败: ' + error.message, 'error');
+        }
+    }
+
+    async openConfigEditor(name) {
+        try {
+            const resp = await fetch('/api/configs/content?name=' + encodeURIComponent(name));
+            if (!resp.ok) {
+                const t = await resp.text();
+                this.showMessage('读取配置失败: ' + t, 'error');
+                return;
+            }
+            const data = await resp.json();
+            this.editingConfigName = name;
+            document.getElementById('config-editor-title').textContent = '编辑配置: ' + name;
+            document.getElementById('config-editor-content').value = data.content || '';
+            document.getElementById('config-editor-error').style.display = 'none';
+            document.getElementById('config-editor-modal').style.display = 'flex';
+        } catch (e) {
+            this.showMessage('读取配置失败: ' + e.message, 'error');
+        }
+    }
+
+    closeConfigEditor() {
+        document.getElementById('config-editor-modal').style.display = 'none';
+        this.editingConfigName = null;
+    }
+
+    async saveConfigEditor() {
+        const name = this.editingConfigName;
+        const content = document.getElementById('config-editor-content').value;
+        const errorBox = document.getElementById('config-editor-error');
+        errorBox.style.display = 'none';
+        try {
+            const resp = await fetch('/api/configs/content', {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ name, content })
+            });
+            if (!resp.ok) {
+                const msg = await resp.text();
+                errorBox.textContent = msg;
+                errorBox.style.display = 'block';
+                return;
+            }
+            const result = await resp.json();
+            this.showMessage('配置保存成功' + (result.active ? '（已实时生效）' : ''), 'success');
+            this.closeConfigEditor();
+            await this.loadConfigs();
+        } catch (e) {
+            errorBox.textContent = '保存失败: ' + e.message;
+            errorBox.style.display = 'block';
+        }
+    }
+
+    async exportConfig(name) {
+        try {
+            const resp = await fetch('/api/configs/export?name=' + encodeURIComponent(name));
+            if (!resp.ok) {
+                this.showMessage('导出失败', 'error');
+                return;
+            }
+            const blob = await resp.blob();
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = name + '.yaml';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(a.href);
+        } catch (e) {
+            this.showMessage('导出失败: ' + e.message, 'error');
+        }
+    }
+
+    async exportAllConfigs() {
+        try {
+            const resp = await fetch('/api/configs/export-all');
+            if (!resp.ok) {
+                this.showMessage('批量导出失败', 'error');
+                return;
+            }
+            const blob = await resp.blob();
+            const a = document.createElement('a');
+            a.href = URL.createObjectURL(blob);
+            a.download = 'configs_' + Date.now() + '.zip';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            URL.revokeObjectURL(a.href);
+        } catch (e) {
+            this.showMessage('批量导出失败: ' + e.message, 'error');
         }
     }
 
