@@ -347,6 +347,7 @@ body {
     margin: 0 auto;
     padding: 20px;
     overflow-x: hidden;
+    width: 100%;
 }
 
 /* Modal styles */
@@ -501,6 +502,8 @@ body {
     border-radius: 12px;
     padding: 20px;
     margin-bottom: 20px;
+    min-width: 0;
+    overflow: hidden;
 }
 
 .card h3 {
@@ -511,8 +514,9 @@ body {
 
 .grid-2x2 {
     display: grid;
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: minmax(400px, 1fr) minmax(400px, 1fr);
     gap: 20px;
+    width: 100%;
 }
 
 @media (max-width: 768px) {
@@ -722,13 +726,14 @@ tr:hover {
 /* Chart styles */
 .chart-area {
     height: 200px;
+    max-height: 200px;
     background: #1e293b;
     border: 1px solid #334155;
     border-radius: 6px;
     padding: 10px;
     margin-bottom: 10px;
     position: relative;
-    overflow: hidden;
+    overflow: auto;
 }
 
 .chart-legend {
