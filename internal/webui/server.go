@@ -131,9 +131,13 @@ type WebUIServer struct {
 
 // NewWebUIServer creates a new WebUI server
 func NewWebUIServer(cfg *config.Config, endpointManager *endpoint.Manager, monitoringMiddleware *middleware.MonitoringMiddleware, startTime time.Time, logger *slog.Logger) *WebUIServer {
-	// Initialize config management
-	configDir := "config"
-	registryPath := filepath.Join(configDir, "registry.yaml")
+    // Initialize config management
+    configDir := "config"
+    // Normalize to absolute to avoid systemd working dir issues
+    if abs, err := filepath.Abs(configDir); err == nil {
+        configDir = abs
+    }
+    registryPath := filepath.Join(configDir, "registry.yaml")
 
 	// Try to initialize config registry
 	configRegistry, err := config.ScanAndInitializeRegistry(configDir, registryPath, "")
@@ -1189,11 +1193,32 @@ func (w *WebUIServer) handleConfigContent(rw http.ResponseWriter, r *http.Reques
             return
         }
 
-        // Write back to file
-        if err := os.WriteFile(meta.FilePath, []byte(req.Content), 0644); err != nil {
-            w.logger.Error("Failed to write config file", "error", err, "path", meta.FilePath)
-            http.Error(rw, "Failed to save config", http.StatusInternalServerError)
+        // Ensure directory exists
+        if err := os.MkdirAll(filepath.Dir(meta.FilePath), 0o755); err != nil {
+            w.logger.Error("Failed to create config directory", "error", err, "path", filepath.Dir(meta.FilePath))
+            http.Error(rw, fmt.Sprintf("Failed to prepare directory: %v", err), http.StatusInternalServerError)
             return
+        }
+
+        // Write back to file (create if not exists)
+        f, err := os.OpenFile(meta.FilePath, os.O_WRONLY|os.O_TRUNC|os.O_CREATE, 0o644)
+        if err != nil {
+            w.logger.Error("Failed to open config file for write", "error", err, "path", meta.FilePath)
+            status := http.StatusInternalServerError
+            if os.IsPermission(err) {
+                status = http.StatusForbidden
+            }
+            http.Error(rw, fmt.Sprintf("Failed to write config file: %v (path: %s)", err, meta.FilePath), status)
+            return
+        }
+        if _, err := f.Write([]byte(req.Content)); err != nil {
+            f.Close()
+            w.logger.Error("Failed to write config content", "error", err, "path", meta.FilePath)
+            http.Error(rw, fmt.Sprintf("Failed to save config content: %v", err), http.StatusInternalServerError)
+            return
+        }
+        if err := f.Close(); err != nil {
+            w.logger.Warn("Error closing config file after write", "error", err)
         }
 
         // Update registry metadata (UpdatedAt)

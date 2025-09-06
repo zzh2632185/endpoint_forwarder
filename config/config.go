@@ -443,8 +443,13 @@ type ConfigWatcher struct {
 
 // NewConfigWatcher creates a new configuration watcher
 func NewConfigWatcher(configPath string, logger *slog.Logger) (*ConfigWatcher, error) {
-	// Load initial configuration
-	config, err := LoadConfig(configPath)
+    // Normalize to absolute path for watcher reliability
+    if abs, err := filepath.Abs(configPath); err == nil {
+        configPath = abs
+    }
+
+    // Load initial configuration
+    config, err := LoadConfig(configPath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load initial config: %w", err)
 	}
@@ -987,18 +992,23 @@ func ScanAndInitializeRegistry(configDir, registryPath, currentConfigPath string
 			continue
 		}
 
-		// Create metadata
-		_, err = os.Stat(filePath)
+        // Normalize to absolute path
+        if abs, errAbs := filepath.Abs(filePath); errAbs == nil {
+            filePath = abs
+        }
+
+        // Create metadata
+        _, err = os.Stat(filePath)
 		if err != nil {
 			continue
 		}
 
-		metadata := ConfigMetadata{
-			Name:        configName,
-			FilePath:    filePath,
-			Description: fmt.Sprintf("Configuration: %s", configName),
-			IsActive:    configName == currentConfigName,
-		}
+        metadata := ConfigMetadata{
+            Name:        configName,
+            FilePath:    filePath,
+            Description: fmt.Sprintf("Configuration: %s", configName),
+            IsActive:    configName == currentConfigName,
+        }
 
 		// Add to registry
 		registry.AddConfig(metadata)
@@ -1049,8 +1059,11 @@ func ImportConfigFile(configDir, configName string, configData []byte, registry 
 	}
 
 	// Generate file path
-	fileName := fmt.Sprintf("config_%s.yaml", configName)
-	filePath := filepath.Join(configDir, fileName)
+    fileName := fmt.Sprintf("config_%s.yaml", configName)
+    filePath := filepath.Join(configDir, fileName)
+    if abs, errAbs := filepath.Abs(filePath); errAbs == nil {
+        filePath = abs
+    }
 
 	// Write config file
 	if err := os.WriteFile(filePath, configData, 0644); err != nil {
