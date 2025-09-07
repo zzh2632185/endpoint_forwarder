@@ -160,11 +160,12 @@ const indexHTML = `<!DOCTYPE html>
                                     <th>优先级</th>
                                     <th>响应时间</th>
                                     <th>请求数</th>
+                                    <th>失败数</th>
                                 </tr>
                             </thead>
                             <tbody id="endpoints-table-body">
                                 <tr>
-                                    <td colspan="6" class="placeholder">正在加载端点...</td>
+                                    <td colspan="7" class="placeholder">正在加载端点...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -2173,6 +2174,7 @@ class WebUIApp {
 
                 const statusIcon = endpoint.healthy ? '🟢' : '🔴';
                 const requests = endpoint.stats ? endpoint.stats.totalRequests : 0;
+                const failedRequests = endpoint.failedRequests || 0;  // Use new failedRequests field
 
                 row.innerHTML =
                     '<td><span class="status-icon">' + statusIcon + '</span></td>' +
@@ -2180,7 +2182,8 @@ class WebUIApp {
                     '<td>' + this.truncateUrl(endpoint.url, 25) + '</td>' +
                     '<td>' + endpoint.priority + '</td>' +
                     '<td>' + endpoint.responseTime + 'ms</td>' +
-                    '<td>' + requests + '</td>';
+                    '<td>' + requests + '</td>' +
+                    '<td>' + failedRequests + '</td>';
 
                 tbody.appendChild(row);
             });
