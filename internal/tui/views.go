@@ -591,7 +591,7 @@ func (v *EndpointsView) addEndpointRow(row int, ep *endpoint.Endpoint, metrics *
 		priorityText,                                                      // Priority
 		fmt.Sprintf("%dms", status.ResponseTime.Milliseconds()),           // Response time
 		fmt.Sprintf("%d", totalReqs),                                      // Requests
-		fmt.Sprintf("%d", status.ConsecutiveFails),                        // Failures
+		fmt.Sprintf("%d", v.getEndpointFailedRequests(ep.Config.Name)),   // API Request Failures
 	}
 	
 	for col, text := range cells {
@@ -657,7 +657,7 @@ func (v *EndpointsView) updateDetails() {
 		healthIcon = "🟢"
 	}
 	detailText.WriteString(fmt.Sprintf("%s %s | [cyan]%dms[white] | Fails: [red]%d[white]\n", 
-		healthIcon, healthStatus, status.ResponseTime.Milliseconds(), status.ConsecutiveFails))
+		healthIcon, healthStatus, status.ResponseTime.Milliseconds(), v.getEndpointFailedRequests(endpoint.Config.Name)))
 	detailText.WriteString(fmt.Sprintf("Last Check: [cyan]%v[white]\n", status.LastCheck.Format("15:04:05")))
 	
 	// Performance Metrics - Only show if there's data
@@ -731,6 +731,15 @@ func (v *EndpointsView) updateDetails() {
 		v.lastDetailHash = newContent
 		v.detailBox.SetText(newContent)
 	}
+}
+
+// getEndpointFailedRequests returns the number of failed API requests for an endpoint
+func (v *EndpointsView) getEndpointFailedRequests(endpointName string) int64 {
+	metrics := v.monitoringMiddleware.GetMetrics().GetMetrics()
+	if endpointStats := metrics.EndpointStats[endpointName]; endpointStats != nil {
+		return endpointStats.FailedRequests
+	}
+	return 0
 }
 
 // showGroupDetails shows details for a selected group header
