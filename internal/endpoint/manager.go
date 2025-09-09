@@ -116,6 +116,12 @@ func (m *Manager) UpdateConfig(cfg *config.Config) {
 	}
 	m.endpoints = endpoints
 
+	// Reset Round-Robin index when configuration changes to ensure fresh start
+	// This only affects round-robin strategy and doesn't impact priority or fastest strategies
+	m.rrMutex.Lock()
+	m.roundRobinIdx = 0
+	m.rrMutex.Unlock()
+
 	// Update group manager with new config and endpoints
 	m.groupManager.UpdateConfig(cfg)
 	m.groupManager.UpdateGroups(m.endpoints)
@@ -337,7 +343,7 @@ func (m *Manager) GetFastestEndpointsWithRealTimeTest(ctx context.Context) []*En
 func (m *Manager) GetEndpointByName(name string) *Endpoint {
 	// First filter by active groups
 	activeEndpoints := m.groupManager.FilterEndpointsByActiveGroups(m.endpoints)
-	
+
 	// Then find by name
 	for _, endpoint := range activeEndpoints {
 		if endpoint.Config.Name == name {
@@ -370,26 +376,26 @@ func (m *Manager) GetTokenForEndpoint(ep *Endpoint) string {
 	if ep.Config.Token != "" {
 		return ep.Config.Token
 	}
-	
+
 	// 2. Find the first endpoint in the same group that has a token
 	groupName := ep.Config.Group
 	if groupName == "" {
 		groupName = "Default"
 	}
-	
+
 	// Search through all endpoints for the same group
 	for _, endpoint := range m.endpoints {
 		endpointGroup := endpoint.Config.Group
 		if endpointGroup == "" {
 			endpointGroup = "Default"
 		}
-		
+
 		// If same group and has token, return it
 		if endpointGroup == groupName && endpoint.Config.Token != "" {
 			return endpoint.Config.Token
 		}
 	}
-	
+
 	// 3. No token found in the group
 	return ""
 }
@@ -402,26 +408,26 @@ func (m *Manager) GetApiKeyForEndpoint(ep *Endpoint) string {
 	if ep.Config.ApiKey != "" {
 		return ep.Config.ApiKey
 	}
-	
+
 	// 2. Find the first endpoint in the same group that has an api-key
 	groupName := ep.Config.Group
 	if groupName == "" {
 		groupName = "Default"
 	}
-	
+
 	// Search through all endpoints for the same group
 	for _, endpoint := range m.endpoints {
 		endpointGroup := endpoint.Config.Group
 		if endpointGroup == "" {
 			endpointGroup = "Default"
 		}
-		
+
 		// If same group and has api-key, return it
 		if endpointGroup == groupName && endpoint.Config.ApiKey != "" {
 			return endpoint.Config.ApiKey
 		}
 	}
-	
+
 	// 3. No api-key found in the group
 	return ""
 }
