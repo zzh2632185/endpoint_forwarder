@@ -38,8 +38,10 @@ type Manager struct {
 	wg            sync.WaitGroup
 	fastTester    *FastTester
 	groupManager  *GroupManager
-	roundRobinIdx int        // Round-robin index for load balancing
-	rrMutex       sync.Mutex // Mutex for round-robin index
+	roundRobinIdx int          // Round-robin index for load balancing
+	rrMutex       sync.Mutex   // Mutex for round-robin index
+	configVersion int64        // Configuration version for detecting updates
+	versionMutex  sync.RWMutex // Mutex for config version
 }
 
 // NewManager creates a new endpoint manager
@@ -60,10 +62,11 @@ func NewManager(cfg *config.Config) *Manager {
 			Timeout:   cfg.Health.Timeout,
 			Transport: httpTransport,
 		},
-		ctx:          ctx,
-		cancel:       cancel,
-		fastTester:   NewFastTester(cfg),
-		groupManager: NewGroupManager(cfg),
+		ctx:           ctx,
+		cancel:        cancel,
+		fastTester:    NewFastTester(cfg),
+		groupManager:  NewGroupManager(cfg),
+		configVersion: time.Now().UnixNano(), // Initialize with current timestamp
 	}
 
 	// Initialize endpoints
@@ -122,6 +125,11 @@ func (m *Manager) UpdateConfig(cfg *config.Config) {
 	m.roundRobinIdx = 0
 	m.rrMutex.Unlock()
 
+	// Update configuration version to signal config change to retry logic
+	m.versionMutex.Lock()
+	m.configVersion = time.Now().UnixNano()
+	m.versionMutex.Unlock()
+
 	// Update group manager with new config and endpoints
 	m.groupManager.UpdateConfig(cfg)
 	m.groupManager.UpdateGroups(m.endpoints)
@@ -142,6 +150,13 @@ func (m *Manager) UpdateConfig(cfg *config.Config) {
 	// Immediately perform health checks on new endpoints to get real status
 	slog.Info("🔄 配置更新后立即执行健康检查")
 	m.performHealthChecks()
+}
+
+// GetConfigVersion returns the current configuration version
+func (m *Manager) GetConfigVersion() int64 {
+	m.versionMutex.RLock()
+	defer m.versionMutex.RUnlock()
+	return m.configVersion
 }
 
 // GetHealthyEndpoints returns a list of healthy endpoints from active groups based on strategy
