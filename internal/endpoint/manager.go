@@ -98,8 +98,8 @@ func (m *Manager) Start() {
 
 // Stop stops the health checking routine
 func (m *Manager) Stop() {
-	m.cancel()
-	m.wg.Wait()
+    m.cancel()
+    m.wg.Wait()
 }
 
 // UpdateConfig updates the manager configuration and recreates endpoints
@@ -130,14 +130,17 @@ func (m *Manager) UpdateConfig(cfg *config.Config) {
 	m.configVersion = time.Now().UnixNano()
 	m.versionMutex.Unlock()
 
-	// Update group manager with new config and endpoints
-	m.groupManager.UpdateConfig(cfg)
-	m.groupManager.UpdateGroups(m.endpoints)
+    // Update group manager with new config and endpoints
+    m.groupManager.UpdateConfig(cfg)
+    m.groupManager.UpdateGroups(m.endpoints)
 
-	// Update fast tester with new config
-	if m.fastTester != nil {
-		m.fastTester.UpdateConfig(cfg)
-	}
+    // Reset group states (cooldowns/retries) on configuration change to avoid stale failures persisting
+    m.groupManager.ResetAllStates()
+
+    // Update fast tester with new config
+    if m.fastTester != nil {
+        m.fastTester.UpdateConfig(cfg)
+    }
 
 	// Recreate transport with new proxy configuration
 	if transport, err := transport.CreateTransport(cfg); err == nil {
@@ -150,6 +153,33 @@ func (m *Manager) UpdateConfig(cfg *config.Config) {
 	// Immediately perform health checks on new endpoints to get real status
 	slog.Info("🔄 配置更新后立即执行健康检查")
 	m.performHealthChecks()
+}
+
+// ResetStates resets group cooldown/retry states, clears fast-test cache,
+// and marks all endpoints healthy. It then performs a health check.
+func (m *Manager) ResetStates() {
+    // Reset groups
+    m.groupManager.ResetAllStates()
+
+    // Reset endpoints to optimistic healthy
+    now := time.Now()
+    for _, ep := range m.endpoints {
+        ep.mutex.Lock()
+        ep.Status.Healthy = true
+        ep.Status.ConsecutiveFails = 0
+        ep.Status.LastCheck = now
+        ep.Status.ResponseTime = 0
+        ep.mutex.Unlock()
+    }
+
+    // Clear fast test cache
+    if m.fastTester != nil {
+        m.fastTester.ResetCache()
+    }
+
+    slog.Info("♻️ [状态重置] 已重置组、端点与快速测试缓存，开始健康检查")
+    // Trigger immediate health checks
+    m.performHealthChecks()
 }
 
 // GetConfigVersion returns the current configuration version

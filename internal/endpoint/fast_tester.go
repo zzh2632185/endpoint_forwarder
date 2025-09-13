@@ -287,3 +287,11 @@ func (ft *FastTester) UpdateConfig(cfg *config.Config) {
 	ft.resultCache = make(map[string]*FastTestResult)
 	ft.cacheMutex.Unlock()
 }
+
+// ResetCache clears the fast tester's result cache without recreating the client.
+func (ft *FastTester) ResetCache() {
+    ft.cacheMutex.Lock()
+    ft.resultCache = make(map[string]*FastTestResult)
+    ft.cacheMutex.Unlock()
+    slog.Info("🧹 [FastTester] 已清空快速测试缓存")
+}

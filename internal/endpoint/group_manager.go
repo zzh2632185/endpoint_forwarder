@@ -108,8 +108,23 @@ func (gm *GroupManager) UpdateGroups(endpoints []*Endpoint) {
 	
 	gm.groups = newGroups
 	
-	// Update active status based on cooldown timers
-	gm.updateActiveGroups()
+    // Update active status based on cooldown timers
+    gm.updateActiveGroups()
+}
+
+// ResetAllStates clears retry counters and cooldown timers for all groups and marks them active.
+// Use this when configuration changes or switching configs to avoid stale cooldowns affecting new settings.
+func (gm *GroupManager) ResetAllStates() {
+    gm.mutex.Lock()
+    defer gm.mutex.Unlock()
+
+    for _, group := range gm.groups {
+        group.RetryCount = 0
+        group.CooldownUntil = time.Time{}
+        group.IsActive = true
+    }
+
+    slog.Info("🔄 [组管理] 已重置所有组的重试计数与冷却状态")
 }
 
 // updateActiveGroups updates which groups are currently active

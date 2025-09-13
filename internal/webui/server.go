@@ -195,9 +195,9 @@ func (w *WebUIServer) Start() error {
 	mux.HandleFunc("/login", w.authMiddleware.HandleLogin)
 	mux.HandleFunc("/logout", w.authMiddleware.HandleLogout)
 
-	// Protected endpoints (require authentication if password is set)
-	mux.HandleFunc("/", w.authMiddleware.RequireAuth(w.handleIndex))
-	mux.HandleFunc("/static/", w.authMiddleware.RequireAuth(w.handleStatic))
+    // Protected endpoints (require authentication if password is set)
+    mux.HandleFunc("/", w.authMiddleware.RequireAuth(w.handleIndex))
+    mux.HandleFunc("/static/", w.authMiddleware.RequireAuth(w.handleStatic))
 
 	// Protected API endpoints
 	mux.HandleFunc("/api/overview", w.authMiddleware.RequireAuth(w.handleOverview))
@@ -228,7 +228,9 @@ func (w *WebUIServer) Start() error {
 	// New: config file content + export endpoints
 	mux.HandleFunc("/api/configs/content", w.authMiddleware.RequireAuth(w.handleConfigContent))
 	mux.HandleFunc("/api/configs/export", w.authMiddleware.RequireAuth(w.handleConfigExport))
-	mux.HandleFunc("/api/configs/export-all", w.authMiddleware.RequireAuth(w.handleConfigExportAll))
+    mux.HandleFunc("/api/configs/export-all", w.authMiddleware.RequireAuth(w.handleConfigExportAll))
+    // State reset endpoint
+    mux.HandleFunc("/api/reset-state", w.authMiddleware.RequireAuth(w.handleResetState))
 
 	w.server = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", w.cfg.WebUI.Host, w.cfg.WebUI.Port),
@@ -266,6 +268,27 @@ func (w *WebUIServer) Start() error {
 		w.logger.Info("✅ WebUI服务器启动成功！", "url", fmt.Sprintf("http://%s", w.server.Addr))
 		return nil
 	}
+}
+
+// handleResetState resets group cooldown/retry, clears fast-test cache and endpoint statuses
+func (w *WebUIServer) handleResetState(rw http.ResponseWriter, r *http.Request) {
+    if r.Method != http.MethodPost {
+        http.Error(rw, "Method not allowed", http.StatusMethodNotAllowed)
+        return
+    }
+
+    if w.endpointManager == nil {
+        http.Error(rw, "Endpoint manager not initialized", http.StatusInternalServerError)
+        return
+    }
+
+    w.logger.Info("♻️ WebUI: 收到状态重置请求，正在重置组/端点/缓存")
+    w.endpointManager.ResetStates()
+
+    w.writeJSON(rw, map[string]interface{}{
+        "success": true,
+        "message": "状态已重置，已触发健康检查",
+    })
 }
 
 // Stop stops the WebUI server

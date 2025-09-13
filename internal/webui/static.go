@@ -21,6 +21,7 @@ const indexHTML = `<!DOCTYPE html>
                     <span id="last-update">最后更新: --:--:--</span>
                 </div>
                 <div class="auth-controls">
+                    <button id="reset-state-btn" class="reset-btn" title="重置状态">♻️</button>
                     <a href="/logout" class="logout-btn" title="退出登录">🚪</a>
                 </div>
             </div>
@@ -443,6 +444,22 @@ body {
     background: rgba(239, 68, 68, 0.2);
     border-color: rgba(239, 68, 68, 0.5);
     transform: translateY(-1px);
+}
+
+/* Reset state button */
+.reset-btn {
+    background: #f0f4ff;
+    border: 1px solid #9db4ff;
+    color: #2f5aff;
+    padding: 6px 10px;
+    border-radius: 6px;
+    text-decoration: none;
+    font-size: 1.1rem;
+    cursor: pointer;
+    transition: background 0.2s ease;
+}
+.reset-btn:hover {
+    background: #e6edff;
 }
 
 .status-bar span {
@@ -1559,10 +1576,35 @@ class WebUIApp {
         this.setupEventSource();
         this.setupLogStream();
         this.setupEditMode();
+        this.setupResetControl();
         this.loadAllData();
 
         // Refresh data every 5 seconds as fallback
         setInterval(() => this.loadAllData(), 5000);
+    }
+
+    setupResetControl() {
+        const btn = document.getElementById('reset-state-btn');
+        if (!btn) return;
+        btn.addEventListener('click', async () => {
+            btn.disabled = true;
+            const oldText = btn.textContent;
+            btn.textContent = '⏳';
+            try {
+                const resp = await fetch('/api/reset-state', { method: 'POST' });
+                if (!resp.ok) throw new Error('请求失败');
+                const data = await resp.json();
+                console.log('Reset state:', data);
+                this.addLogToUI({ timestamp: new Date().toLocaleTimeString(), level: 'INFO', source: 'webui', message: '状态已重置，已触发健康检查' });
+                this.loadAllData();
+            } catch (e) {
+                console.error('重置状态失败', e);
+                alert('重置状态失败，请查看服务端日志');
+            } finally {
+                btn.disabled = false;
+                btn.textContent = oldText;
+            }
+        });
     }
 
     setupTabs() {
