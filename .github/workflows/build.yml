@@ -20,11 +20,6 @@ jobs:
     strategy:
       matrix:
         include:
-          # Linux AMD64 - optimized for Ubuntu usage
-          - os: linux
-            arch: amd64
-            runner: ubuntu-latest
-            ext: ''
           # Linux ARM64 - for ARM-based servers
           - os: linux
             arch: arm64
@@ -115,7 +110,7 @@ jobs:
       uses: docker/build-push-action@v5
       with:
         context: .
-        platforms: linux/amd64,linux/arm64  # 支持AMD64和ARM64架构
+        platforms: linux/arm64  # 专注于ARM64架构
         push: ${{ github.event_name != 'pull_request' }}
         tags: ${{ steps.meta.outputs.tags }}
         labels: ${{ steps.meta.outputs.labels }}
@@ -160,9 +155,8 @@ jobs:
           ## Claude EndPoints Forwarder ${{ github.ref_name }}
           ### 📦 下载说明
 
-          下载适合您架构的版本：
+          下载ARM64版本：
 
-          - **Linux x64**: `endpoint_forwarder-linux-amd64.tar.gz` (适用于64位Intel/AMD处理器)
           - **Linux ARM64**: `endpoint_forwarder-linux-arm64.tar.gz` (适用于ARM64处理器，如Apple M系列、AWS Graviton等)
           
           ### 🚀 快速开始

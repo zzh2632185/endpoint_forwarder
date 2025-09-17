@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"endpoint_forwarder/config"
+
 	"golang.org/x/net/proxy"
 )
 
@@ -19,7 +20,7 @@ func CreateTransport(cfg *config.Config) (*http.Transport, error) {
 			Timeout:   30 * time.Second,
 			KeepAlive: 30 * time.Second,
 		}).DialContext,
-		ForceAttemptHTTP2:     true,
+		ForceAttemptHTTP2:     false, // 禁用HTTP/2强制尝试，避免协议兼容性问题
 		MaxIdleConns:          100,
 		IdleConnTimeout:       90 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
